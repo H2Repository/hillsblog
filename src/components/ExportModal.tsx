@@ -192,7 +192,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-bold text-white flex items-center gap-1.5">
                   <Edit3 className="w-4 h-4 text-emerald-400" />
-                  2. 수정된 일기
+                  2. 수정된 일기 (최근 2주일 이내)
                 </span>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-bold font-mono border ${
                   mode === 'modified' 
@@ -203,7 +203,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-stone-400 mt-1">
-                최초 등록 이후 내용이나 사진이 수정된 일기만 선별하여 다운로드합니다.
+                최근 2주일 이내에 내용이나 사진이 수정된 일기만 선별하여 다운로드합니다.
               </p>
             </div>
           </div>

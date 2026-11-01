@@ -189,10 +189,16 @@ export interface ExportOptions {
 }
 
 /**
- * Checks if a diary has been modified after creation
+ * Checks if a diary has been modified after creation within the last 2 weeks (14 days)
  */
-export function isDiaryModified(d: DiaryEntry): boolean {
-  return Boolean(d.updatedAt && d.createdAt && d.updatedAt - d.createdAt > 1000);
+export function isDiaryModified(d: DiaryEntry, withinDays = 14): boolean {
+  if (!d.updatedAt || !d.createdAt) return false;
+  const wasModified = d.updatedAt - d.createdAt > 1000;
+  if (!wasModified) return false;
+
+  const now = Date.now();
+  const cutoffTime = now - withinDays * 24 * 60 * 60 * 1000;
+  return d.updatedAt >= cutoffTime;
 }
 
 /**
