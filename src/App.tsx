@@ -4,6 +4,8 @@ import {
   getStoredDiaries, 
   saveDiaries, 
   exportDiariesToJson, 
+  exportDiariesWithOptions,
+  ExportOptions,
   sortDiariesDescending,
   deduplicateDiaries,
   isDiaryDuplicate
@@ -26,6 +28,7 @@ import { DiaryEditorModal } from './components/DiaryEditorModal';
 import { DiaryDetailModal } from './components/DiaryDetailModal';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmModal } from './components/ConfirmModal';
+import { ExportModal } from './components/ExportModal';
 import { FlutterCodeModal } from './components/FlutterCodeModal';
 import { LoginModal } from './components/LoginModal';
 import { downloadFlutterProjectZip } from './utils/flutterDownload';
@@ -71,6 +74,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [visitorLogs, setVisitorLogs] = useState<VisitorLog[]>([]);
   const [isVisitorModalOpen, setIsVisitorModalOpen] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Subscribe to sync status
   useEffect(() => {
@@ -293,13 +297,24 @@ export default function App() {
     return Math.round(dist * 10) / 10;
   }, [diaries]);
 
+  const handleExportWithOptions = async (options: ExportOptions) => {
+    const result = await exportDiariesWithOptions(diaries, options);
+    if (result.count > 0) {
+      setToastMessage({ text: `${result.count}개의 일기 JSON 다운로드 완료 (${result.fileName})`, type: 'success' });
+    } else {
+      setToastMessage({ text: '선택한 조건에 해당하는 일기가 없습니다 (0개)', type: 'info' });
+    }
+    setTimeout(() => setToastMessage(null), 3000);
+    return { count: result.count, success: result.success };
+  };
+
   return (
     <div className="flex flex-col flex-1 bg-stone-100 text-stone-900 font-sans selection:bg-amber-200 selection:text-amber-900 overflow-x-hidden">
       <Navbar
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         onOpenNewDiary={() => { setEditingDiary(null); setIsEditorOpen(true); }}
-        onExportData={() => exportDiariesToJson(diaries)}
+        onExportData={() => setIsExportModalOpen(true)}
         totalDiariesCount={diaries.length}
         totalViewsCount={isAdmin ? diaries.reduce((acc, d) => acc + (d.views || 0), 0) : undefined}
         visitorLogsCount={visitorLogs.length}
@@ -428,6 +443,12 @@ export default function App() {
         finally { setIsDownloadingFlutter(false); }
       }} />
       {isVisitorModalOpen && isAdmin && <VisitorLocationModal isOpen={isVisitorModalOpen} onClose={() => setIsVisitorModalOpen(false)} visitorLogs={visitorLogs} />}
+      <ExportModal 
+        isOpen={isExportModalOpen} 
+        onClose={() => setIsExportModalOpen(false)} 
+        diaries={diaries} 
+        onExport={handleExportWithOptions} 
+      />
       
       {toastMessage && (
         <div className={`fixed top-18 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl border flex items-center gap-2 backdrop-blur-md animate-in fade-in slide-in-from-top-3 duration-200 max-w-[90vw] ${

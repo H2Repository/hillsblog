@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import Database from 'better-sqlite3';
@@ -66,7 +65,7 @@ async function startServer() {
     try {
       const allDiaries = await db.select().from(schema.diaries).all();
       res.json(allDiaries);
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -79,7 +78,7 @@ async function startServer() {
         set: diary
       });
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -88,7 +87,7 @@ async function startServer() {
     try {
       await db.delete(schema.diaries).where(eq(schema.diaries.id, req.params.id));
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -105,7 +104,7 @@ async function startServer() {
         }
       }
       res.json({ success: true, count: diariesToMigrate.length });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -120,7 +119,7 @@ async function startServer() {
       } else {
         res.status(404).json({ error: 'Diary not found' });
       }
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -129,7 +128,7 @@ async function startServer() {
     try {
       await db.update(schema.diaries).set({ views: 0 });
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -138,7 +137,7 @@ async function startServer() {
     try {
       const logs = await db.select().from(schema.visitorLogs).all();
       res.json(logs);
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -151,7 +150,7 @@ async function startServer() {
         set: log
       });
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -160,17 +159,25 @@ async function startServer() {
     try {
       await db.delete(schema.visitorLogs);
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Vite middleware
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  });
-  app.use(vite.middlewares);
+  // Vite middleware or static serving
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.join(__dirname, 'dist')));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    });
+  } else {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
 
   const PORT = 3000;
   app.listen(PORT, '0.0.0.0', () => {

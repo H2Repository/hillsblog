@@ -85,14 +85,6 @@ export function subscribeSyncStatus(listener: SyncListener): () => void {
 
 let isProcessing = false;
 
-// Global state for quota limit (subtle indicator)
-let serverQuotaLimitExceeded = false;
-export const isServerQuotaExceeded = () => serverQuotaLimitExceeded;
-export const setServerQuotaExceeded = (val: boolean) => {
-  serverQuotaLimitExceeded = val;
-  notifySyncListeners();
-};
-
 /**
  * Processes the background upload retry queue targeting SQLite API.
  */

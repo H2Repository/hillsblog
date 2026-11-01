@@ -431,7 +431,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           여행일기 백업 다운로드 (JSON)
                         </p>
                         <p className="text-[11px] text-stone-400 truncate">
-                          전체 여행일기 데이터를 JSON 파일로 내보내기
+                          전체 / 수정된 일기 / 기간 설정 다운로드
                         </p>
                       </div>
                     </button>

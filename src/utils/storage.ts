@@ -180,12 +180,74 @@ export function saveDiaries(diaries: DiaryEntry[]): void {
  * - Uses Blob + Object URL with application/json
  * - Triggers native browser download directly into the device's Download (다운로드) folder
  */
-export async function exportDiariesToJson(diaries: DiaryEntry[]): Promise<void> {
-  const sorted = sortDiariesDescending(diaries);
-  const jsonString = JSON.stringify(sorted, null, 2);
-  const nowStr = new Date().toISOString().slice(0, 10);
-  const fileName = `hills_blog_diaries_${nowStr}.json`;
+export type ExportMode = 'all' | 'modified' | 'range';
 
+export interface ExportOptions {
+  mode: ExportMode;
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string;   // YYYY-MM-DD
+}
+
+/**
+ * Checks if a diary has been modified after creation
+ */
+export function isDiaryModified(d: DiaryEntry): boolean {
+  return Boolean(d.updatedAt && d.createdAt && d.updatedAt - d.createdAt > 1000);
+}
+
+/**
+ * Filters diaries according to selected export options
+ */
+export function filterDiariesForExport(diaries: DiaryEntry[], options: ExportOptions): DiaryEntry[] {
+  const sorted = sortDiariesDescending(diaries);
+
+  if (options.mode === 'all') {
+    return sorted;
+  }
+
+  if (options.mode === 'modified') {
+    return sorted.filter(isDiaryModified);
+  }
+
+  if (options.mode === 'range') {
+    const start = options.startDate || '1970-01-01';
+    const end = options.endDate || '2099-12-31';
+    const minDate = start <= end ? start : end;
+    const maxDate = start <= end ? end : start;
+
+    return sorted.filter((d) => {
+      if (!d.date) return false;
+      return d.date >= minDate && d.date <= maxDate;
+    });
+  }
+
+  return sorted;
+}
+
+/**
+ * Exports diaries as a formatted JSON file with specific options
+ */
+export async function exportDiariesWithOptions(
+  diaries: DiaryEntry[],
+  options: ExportOptions
+): Promise<{ count: number; success: boolean; fileName: string }> {
+  const filtered = filterDiariesForExport(diaries, options);
+  const nowStr = new Date().toISOString().slice(0, 10);
+
+  let fileName = `hills_diaries_전체_${nowStr}.json`;
+  if (options.mode === 'modified') {
+    fileName = `hills_diaries_수정된일기_${nowStr}.json`;
+  } else if (options.mode === 'range') {
+    const start = options.startDate || nowStr;
+    const end = options.endDate || nowStr;
+    fileName = `hills_diaries_${start}_${end}.json`;
+  }
+
+  if (filtered.length === 0) {
+    return { count: 0, success: false, fileName };
+  }
+
+  const jsonString = JSON.stringify(filtered, null, 2);
   const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 
@@ -198,7 +260,6 @@ export async function exportDiariesToJson(diaries: DiaryEntry[]): Promise<void> 
 
   downloadAnchor.click();
 
-  // Keep Object URL active for 3 seconds so mobile OS download manager has sufficient time to stream and write the file into Download folder
   setTimeout(() => {
     try {
       if (document.body.contains(downloadAnchor)) {
@@ -206,5 +267,20 @@ export async function exportDiariesToJson(diaries: DiaryEntry[]): Promise<void> 
       }
       URL.revokeObjectURL(url);
     } catch {}
-  }, 3000);
+  }, 4000);
+
+  return { count: filtered.length, success: true, fileName };
 }
+
+/**
+ * Backward-compatible helper for export
+ */
+export async function exportDiariesToJson(
+  diaries: DiaryEntry[],
+  options?: ExportOptions
+): Promise<{ count: number; success: boolean }> {
+  const result = await exportDiariesWithOptions(diaries, options || { mode: 'all' });
+  return { count: result.count, success: result.success };
+}
+
+
