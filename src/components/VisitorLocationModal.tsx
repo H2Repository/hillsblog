@@ -160,7 +160,28 @@ export const VisitorLocationModal: React.FC<VisitorLocationModalProps> = ({
     setTimeout(() => {
       map.invalidateSize();
     }, 200);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        map.invalidateSize();
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
+    return () => {
+      if (resizeObserver) resizeObserver.disconnect();
+    };
   }, [isOpen, filteredLogs]);
+
+  // Clean up map instance when modal closes
+  useEffect(() => {
+    if (!isOpen && mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+      markersRef.current = [];
+    }
+  }, [isOpen]);
 
   // Focus single log on map
   const handleFocusLog = (log: VisitorLog) => {

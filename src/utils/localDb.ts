@@ -1,345 +1,166 @@
 import { DiaryEntry } from '../types';
 import { sortDiariesDescending } from './storage';
 
-export interface SyncQueueItem {
-  id: string; // Diary ID
-  action: 'save' | 'delete';
-  entry?: DiaryEntry;
-  timestamp: number;
-  retryCount: number;
-  maxRetries: number;
-  status: 'pending' | 'uploading' | 'failed' | 'completed';
-  errorMessage?: string;
-  lastAttempt?: number;
-}
-
-export interface ServerChangeLog {
-  id: string;
-  title: string;
-  action: 'added' | 'updated' | 'deleted';
-  timestamp: number;
-  serverUpdatedAt?: number;
-  details?: string;
-}
-
-const SERVER_CHANGE_LOG_KEY = 'hills_travel_server_change_logs_v1';
-
-export function getServerChangeLogs(): ServerChangeLog[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(SERVER_CHANGE_LOG_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function recordServerChangeLogs(newLogs: ServerChangeLog[]): void {
-  if (typeof window === 'undefined' || !newLogs || newLogs.length === 0) return;
-  try {
-    const existing = getServerChangeLogs();
-    const combined = [...newLogs, ...existing].slice(0, 100);
-    localStorage.setItem(SERVER_CHANGE_LOG_KEY, JSON.stringify(combined));
-    console.log(`[ServerSync] Recorded ${newLogs.length} server change log entries:`, newLogs);
-  } catch (err) {
-    console.warn('recordServerChangeLogs note:', err);
-  }
-}
-
-export function clearServerChangeLogs(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(SERVER_CHANGE_LOG_KEY);
-  } catch {}
-}
-
-const DB_NAME = 'hills_travel_local_db_v1';
+// Database configuration
+const DB_NAME = 'hills_travel_storage_v5';
 const DB_VERSION = 1;
 const STORE_DIARIES = 'diaries';
-const STORE_SYNC_QUEUE = 'sync_queue';
-
-let dbInstancePromise: Promise<IDBDatabase> | null = null;
 
 /**
- * Initializes and opens the IndexedDB database.
- * Supports hundreds of megabytes of offline diary entries and 3MB+ photos.
+ * IndexedDB storage implementation for permanent local browser storage.
  */
-export function getLocalDb(): Promise<IDBDatabase> {
-  if (typeof window === 'undefined' || !window.indexedDB) {
-    return Promise.reject(new Error('IndexedDB is not supported in this environment.'));
-  }
-
-  if (dbInstancePromise) {
-    return dbInstancePromise;
-  }
-
-  dbInstancePromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+async function openDB(): Promise<IDBDatabase> {
+  const db: IDBDatabase = await new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-
-      // 1. Store for full diary entries
       if (!db.objectStoreNames.contains(STORE_DIARIES)) {
-        const diaryStore = db.createObjectStore(STORE_DIARIES, { keyPath: 'id' });
-        diaryStore.createIndex('date', 'date', { unique: false });
-        diaryStore.createIndex('createdAt', 'createdAt', { unique: false });
-        diaryStore.createIndex('updatedAt', 'updatedAt', { unique: false });
-      }
-
-      // 2. Store for background synchronization retry queue
-      if (!db.objectStoreNames.contains(STORE_SYNC_QUEUE)) {
-        const queueStore = db.createObjectStore(STORE_SYNC_QUEUE, { keyPath: 'id' });
-        queueStore.createIndex('status', 'status', { unique: false });
-        queueStore.createIndex('timestamp', 'timestamp', { unique: false });
+        db.createObjectStore(STORE_DIARIES, { keyPath: 'id' });
       }
     };
 
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onerror = () => {
-      dbInstancePromise = null;
-      reject(request.error || new Error('Failed to open local IndexedDB'));
-    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 
-  return dbInstancePromise;
+  // One-time migration from localStorage (v4) to IndexedDB (v5)
+  const MIGRATION_KEY = 'hills_travel_idb_migrated_v5';
+  if (!localStorage.getItem(MIGRATION_KEY)) {
+    try {
+      const oldDiaries = localStorage.getItem('hills_travel_diaries_v4');
+      if (oldDiaries) {
+        const parsed = JSON.parse(oldDiaries);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          console.log(`[Migration] Moving ${parsed.length} diaries from localStorage to IndexedDB...`);
+          const tx = db.transaction(STORE_DIARIES, 'readwrite');
+          const store = tx.objectStore(STORE_DIARIES);
+          parsed.forEach(d => store.put(d));
+        }
+      }
+      localStorage.setItem(MIGRATION_KEY, 'true');
+    } catch (err) {
+      console.warn('[Migration] Error during localStorage to IndexedDB migration:', err);
+    }
+  }
+
+  return db;
 }
 
-/**
- * Loads all diaries stored in the local IndexedDB, sorted descending.
- */
+async function getFromStore<T>(storeName: string, id: string): Promise<T | null> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readonly');
+    const store = transaction.objectStore(storeName);
+    const request = store.get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getAllFromStore<T>(storeName: string): Promise<T[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readonly');
+    const store = transaction.objectStore(storeName);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveToStore<T>(storeName: string, item: T): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readwrite');
+    const store = transaction.objectStore(storeName);
+    const request = store.put(item);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function deleteFromStore(storeName: string, id: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readwrite');
+    const store = transaction.objectStore(storeName);
+    const request = store.delete(id);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function clearStore(storeName: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readwrite');
+    const store = transaction.objectStore(storeName);
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export function isLocalDbPersistent(): boolean {
+  return typeof indexedDB !== 'undefined';
+}
+
+export async function getLocalDiaryCount(): Promise<number> {
+  const diaries = await getAllLocalDiaries();
+  return diaries.length;
+}
+
 export async function getAllLocalDiaries(): Promise<DiaryEntry[]> {
   try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_DIARIES, 'readonly');
-      const store = tx.objectStore(STORE_DIARIES);
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const results = (request.result || []) as DiaryEntry[];
-        resolve(sortDiariesDescending(results));
-      };
-
-      request.onerror = () => {
-        reject(request.error || new Error('Failed to read diaries from IndexedDB'));
-      };
-    });
+    const diaries = await getAllFromStore<DiaryEntry>(STORE_DIARIES);
+    return sortDiariesDescending(diaries);
   } catch (err) {
-    console.warn('getAllLocalDiaries error, fallback to empty array:', err);
+    console.error('getAllLocalDiaries IndexedDB error:', err);
     return [];
   }
 }
 
-/**
- * Gets a single diary from local IndexedDB by ID.
- */
 export async function getLocalDiaryById(id: string): Promise<DiaryEntry | null> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_DIARIES, 'readonly');
-      const store = tx.objectStore(STORE_DIARIES);
-      const request = store.get(id);
-
-      request.onsuccess = () => {
-        resolve((request.result as DiaryEntry) || null);
-      };
-
-      request.onerror = () => {
-        reject(request.error);
-      };
-    });
-  } catch (err) {
-    console.warn(`getLocalDiaryById(${id}) error:`, err);
-    return null;
-  }
+  return getFromStore<DiaryEntry>(STORE_DIARIES, id);
 }
 
-/**
- * Saves or updates a diary entry in local IndexedDB.
- */
 export async function saveLocalDiary(entry: DiaryEntry): Promise<void> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_DIARIES, 'readwrite');
-      const store = tx.objectStore(STORE_DIARIES);
-      const request = store.put(entry);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error || new Error(`Failed to save diary ${entry.id} in local DB`));
-    });
-  } catch (err) {
-    console.error('saveLocalDiary error:', err);
-    throw err;
-  }
+  await saveToStore(STORE_DIARIES, entry);
 }
 
-/**
- * Batch saves multiple diaries into local IndexedDB (e.g. from server fetch).
- */
-export async function saveMultipleLocalDiaries(entries: DiaryEntry[]): Promise<void> {
+export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverwrite = false): Promise<void> {
   if (!entries || entries.length === 0) return;
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_DIARIES, 'readwrite');
-      const store = tx.objectStore(STORE_DIARIES);
+  const existingMap = new Map<string, DiaryEntry>();
+  if (!forceOverwrite) {
+    const current = await getAllLocalDiaries();
+    current.forEach(item => existingMap.set(item.id, item));
+  }
 
-      for (const entry of entries) {
-        store.put(entry);
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_DIARIES, 'readwrite');
+    const store = transaction.objectStore(STORE_DIARIES);
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+
+    entries.forEach(entry => {
+      if (!forceOverwrite) {
+        const existing = existingMap.get(entry.id);
+        if (existing && (existing.updatedAt || 0) > (entry.updatedAt || 0)) {
+          return;
+        }
       }
-
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error('Failed to batch save diaries in local DB'));
+      store.put(entry);
     });
-  } catch (err) {
-    console.error('saveMultipleLocalDiaries error:', err);
-  }
+  });
 }
 
-/**
- * Deletes a diary from local IndexedDB.
- */
 export async function deleteLocalDiary(id: string): Promise<void> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_DIARIES, 'readwrite');
-      const store = tx.objectStore(STORE_DIARIES);
-      const request = store.delete(id);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
-  } catch (err) {
-    console.error(`deleteLocalDiary(${id}) error:`, err);
-    throw err;
-  }
+  await deleteFromStore(STORE_DIARIES, id);
 }
 
-// ==========================================
-// SYNC QUEUE OPERATIONS (IndexedDB)
-// ==========================================
-
-/**
- * Retrieves all items in the background sync retry queue.
- */
-export async function getLocalSyncQueue(): Promise<SyncQueueItem[]> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SYNC_QUEUE, 'readonly');
-      const store = tx.objectStore(STORE_SYNC_QUEUE);
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const items = (request.result || []) as SyncQueueItem[];
-        // Sort chronologically by timestamp
-        resolve(items.sort((a, b) => a.timestamp - b.timestamp));
-      };
-
-      request.onerror = () => reject(request.error);
-    });
-  } catch (err) {
-    console.warn('getLocalSyncQueue error:', err);
-    return [];
-  }
-}
-
-/**
- * Enqueues or updates an item in the background sync retry queue.
- */
-export async function enqueueLocalSyncItem(
-  action: 'save' | 'delete',
-  id: string,
-  entry?: DiaryEntry
-): Promise<SyncQueueItem> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SYNC_QUEUE, 'readwrite');
-      const store = tx.objectStore(STORE_SYNC_QUEUE);
-
-      const existingReq = store.get(id);
-
-      existingReq.onsuccess = () => {
-        const existing = existingReq.result as SyncQueueItem | undefined;
-        const newItem: SyncQueueItem = {
-          id,
-          action,
-          entry: entry || existing?.entry,
-          timestamp: Date.now(),
-          retryCount: existing ? existing.retryCount : 0,
-          maxRetries: 5,
-          status: 'pending',
-          errorMessage: undefined,
-          lastAttempt: undefined,
-        };
-
-        const putReq = store.put(newItem);
-        putReq.onsuccess = () => resolve(newItem);
-        putReq.onerror = () => reject(putReq.error);
-      };
-
-      existingReq.onerror = () => reject(existingReq.error);
-    });
-  } catch (err) {
-    console.error('enqueueLocalSyncItem error:', err);
-    throw err;
-  }
-}
-
-/**
- * Updates the state (e.g., status, retryCount, errorMessage) of a queue item.
- */
-export async function updateLocalSyncItem(item: SyncQueueItem): Promise<void> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SYNC_QUEUE, 'readwrite');
-      const store = tx.objectStore(STORE_SYNC_QUEUE);
-      const request = store.put(item);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
-  } catch (err) {
-    console.error('updateLocalSyncItem error:', err);
-  }
-}
-
-/**
- * Removes a completed item from the sync queue.
- */
-export async function dequeueLocalSyncItem(id: string): Promise<void> {
-  try {
-    const db = await getLocalDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SYNC_QUEUE, 'readwrite');
-      const store = tx.objectStore(STORE_SYNC_QUEUE);
-      const request = store.delete(id);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
-  } catch (err) {
-    console.error(`dequeueLocalSyncItem(${id}) error:`, err);
-  }
-}
-
-/**
- * Gets the total number of pending or failed sync operations.
- */
-export async function getLocalSyncQueueCount(): Promise<number> {
-  try {
-    const queue = await getLocalSyncQueue();
-    return queue.filter((item) => item.status !== 'completed').length;
-  } catch {
-    return 0;
-  }
+export async function clearLocalDb(): Promise<void> {
+  await clearStore(STORE_DIARIES);
 }

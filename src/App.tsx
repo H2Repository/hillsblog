@@ -1,23 +1,14 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { DiaryEntry, TravelPhoto, ViewMode, VisitorLog, CloudSyncStatus } from './types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { DiaryEntry, TravelPhoto, ViewMode, VisitorLog } from './types';
 import { 
   getStoredDiaries, 
   saveDiaries, 
-  exportDiariesToJson, 
   exportDiariesWithOptions,
   ExportOptions,
   sortDiariesDescending,
   deduplicateDiaries,
   isDiaryDuplicate
 } from './utils/storage';
-import { 
-  syncInitialDiariesSQLite,
-  saveDiaryToSQLite, 
-  deleteDiaryFromSQLite,
-  migrateLocalToSQLite,
-  incrementDiaryViewsSQLite,
-  resetAllDiaryViewsSQLite
-} from './services/diarySQLite';
 import { recordVisitorLocation, subscribeVisitorLogs } from './services/visitorService';
 import { calculateDistanceKm } from './utils/geo';
 import { Navbar } from './components/Navbar';
@@ -28,7 +19,7 @@ import { DiaryEditorModal } from './components/DiaryEditorModal';
 import { DiaryDetailModal } from './components/DiaryDetailModal';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmModal } from './components/ConfirmModal';
-import { ExportModal } from './components/ExportModal';
+import { DataManagementModal } from './components/DataManagementModal';
 import { FlutterCodeModal } from './components/FlutterCodeModal';
 import { LoginModal } from './components/LoginModal';
 import { downloadFlutterProjectZip } from './utils/flutterDownload';
@@ -37,27 +28,21 @@ import { useAuth } from './context/AuthContext';
 import { getCachedDiaryTranslation, hasKorean, translateDiaryAsync } from './utils/translationService';
 import { 
   getAllLocalDiaries, 
-  getLocalDiaryById,
   saveLocalDiary,
+  saveMultipleLocalDiaries,
   deleteLocalDiary,
-  getLocalSyncQueueCount,
-  enqueueLocalSyncItem,
-  dequeueLocalSyncItem
+  clearLocalDb
 } from './utils/localDb';
+import {
+  ServerDiaryMeta,
+  getDiaryServerStatus,
+  subscribeServerDiaryStatus,
+  syncMissingAndUpdatedFromServer,
+  upsertDiaryToFirestore,
+} from './services/diaryFirestore';
+import { testFirestoreConnection } from './lib/firebase';
 import { 
-  saveDiaryOfflineFirst, 
-  deleteDiaryOfflineFirst, 
-  processSyncQueue, 
-  subscribeSyncStatus,
-  isDiaryPendingSync,
-  cleanAndHealSyncQueue,
-  stopSyncQueue
-} from './utils/syncManager';
-import { 
-  Plus, 
   Compass, 
-  MapPin, 
-  Download,
   CheckCircle2,
   AlertTriangle,
   Route,
@@ -69,103 +54,184 @@ export default function App() {
   const { isAdmin, openLoginModal, autoLogoutNotice, clearAutoLogoutNotice } = useAuth();
   const [diaries, setDiaries] = useState<DiaryEntry[]>(() => getStoredDiaries());
   const [viewMode, setViewMode] = useState<ViewMode>('blog');
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>('connected');
-  const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [visitorLogs, setVisitorLogs] = useState<VisitorLog[]>([]);
   const [isVisitorModalOpen, setIsVisitorModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [serverMetaMap, setServerMetaMap] = useState<Record<string, ServerDiaryMeta>>({});
+  const [hasLoadedServerMeta, setHasLoadedServerMeta] = useState(false);
+  const [isServerOnline, setIsServerOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [isCheckingServer, setIsCheckingServer] = useState(false);
+  const [uploadingDiaryIds, setUploadingDiaryIds] = useState<Record<string, boolean>>({});
 
-  // Subscribe to sync status
-  useEffect(() => {
-    const unsubscribe = subscribeSyncStatus((status) => {
-      setPendingSyncCount(status.pendingCount);
-      if (status.isSyncing) {
-        setCloudSyncStatus('syncing');
-      } else {
-        setCloudSyncStatus(typeof navigator !== 'undefined' && navigator.onLine ? 'connected' : 'offline');
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Auto-logout notice
+  // Auto-logout notice handler
   useEffect(() => {
     if (autoLogoutNotice) {
-      setToastMessage({ text: autoLogoutNotice, type: 'error' });
+      const msg = autoLogoutNotice;
+      setToastMessage({ text: msg, type: 'error' });
+
+      setTimeout(() => {
+        setToastMessage(prev => (prev?.text === msg ? null : prev));
+      }, 3000);
+
       clearAutoLogoutNotice();
-      const timer = setTimeout(() => setToastMessage(null), 6000);
-      return () => clearTimeout(timer);
     }
   }, [autoLogoutNotice, clearAutoLogoutNotice]);
 
-  // Initial Load & Migration
+  // Initial Load from local IndexedDB storage, then pull missing/updated diaries from server
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
+      let currentLocal: DiaryEntry[] = [];
       try {
         const cached = await getAllLocalDiaries();
         if (cached && cached.length > 0 && isMounted) {
           const { deduplicated } = deduplicateDiaries(cached);
+          currentLocal = deduplicated;
           setDiaries(deduplicated);
+        } else if (isMounted) {
+          // If IndexedDB is empty, seed from localStorage fallback if any exists
+          const fallback = getStoredDiaries();
+          if (fallback.length > 0) {
+            await saveMultipleLocalDiaries(fallback, true);
+            currentLocal = fallback;
+            setDiaries(fallback);
+          }
         }
-      } catch {}
+      } catch (dbErr) {
+        console.error('[Storage] Failed to access local database at boot:', dbErr);
+        if (isMounted) {
+          setToastMessage({ 
+            text: '로컬 저장소 연결 실패. 브라우저 설정을 확인해주세요.', 
+            type: 'error' 
+          });
+        }
+      }
 
-      // Migration
+      // Sync missing or server-updated diaries from Firestore into local IndexedDB
+      if (!isMounted || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
       try {
-        const isMigrated = localStorage.getItem('sqlite_migration_done');
-        if (!isMigrated) {
-          const localDiaries = await getAllLocalDiaries();
-          if (localDiaries.length > 0) await migrateLocalToSQLite(localDiaries);
-          localStorage.setItem('sqlite_migration_done', 'true');
+        const syncRes = await syncMissingAndUpdatedFromServer(currentLocal);
+        if (!isMounted) return;
+        setIsServerOnline(syncRes.online);
+        if (syncRes.online) {
+          setServerMetaMap(syncRes.serverMetaMap);
+          setHasLoadedServerMeta(true);
+          if (syncRes.addedCount > 0 || syncRes.updatedCount > 0) {
+            const refreshedLocal = await getAllLocalDiaries();
+            if (!isMounted) return;
+            const { deduplicated } = deduplicateDiaries(refreshedLocal);
+            setDiaries(deduplicated);
+            const parts: string[] = [];
+            if (syncRes.addedCount > 0) parts.push(`새 일기 ${syncRes.addedCount}개 추가`);
+            if (syncRes.updatedCount > 0) parts.push(`업데이트 ${syncRes.updatedCount}개 반영`);
+            setToastMessage({
+              text: `서버에서 ${parts.join(', ')} 완료`,
+              type: 'success',
+            });
+            setTimeout(() => setToastMessage(null), 3500);
+          }
         }
-      } catch {}
-
-      // SQLite Sync
-      try {
-        const { diaries: freshDiaries } = await syncInitialDiariesSQLite();
-        if (isMounted && freshDiaries && freshDiaries.length > 0) {
-          setDiaries(sortDiariesDescending(freshDiaries));
-          setCloudSyncStatus('connected');
-        }
-      } catch {
-        if (isMounted) setCloudSyncStatus('offline');
+      } catch (serverErr) {
+        console.warn('[Firestore] Initial server-to-local sync skipped:', serverErr);
       }
     };
     loadData();
     return () => { isMounted = false; };
   }, []);
 
-  const handleTriggerSync = async () => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setToastMessage({ text: '오프라인 상태입니다.', type: 'error' });
-      setTimeout(() => setToastMessage(null), 2000);
+  useEffect(() => {
+    if (isAdmin) {
+      const unsubscribe = subscribeVisitorLogs(setVisitorLogs);
+      return () => unsubscribe();
+    }
+  }, [isAdmin]);
+
+  // Refresh server connectivity, server diary count, and pull any missing/updated diaries
+  const refreshServerStatus = async () => {
+    const browserOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+    if (!browserOnline) {
+      setIsServerOnline(false);
       return;
     }
-    setCloudSyncStatus('syncing');
+    setIsCheckingServer(true);
     try {
-      if (isAdmin) await processSyncQueue();
-      const { diaries: freshDiaries } = await syncInitialDiariesSQLite();
-      if (freshDiaries) setDiaries(sortDiariesDescending(freshDiaries));
-      setCloudSyncStatus('connected');
-      setToastMessage({ text: '동기화 완료', type: 'success' });
-      setTimeout(() => setToastMessage(null), 2000);
+      const currentLocal = await getAllLocalDiaries();
+      const syncRes = await syncMissingAndUpdatedFromServer(currentLocal);
+      setIsServerOnline(syncRes.online);
+      if (syncRes.online) {
+        setServerMetaMap(syncRes.serverMetaMap);
+        setHasLoadedServerMeta(true);
+        if (syncRes.addedCount > 0 || syncRes.updatedCount > 0) {
+          const refreshedLocal = await getAllLocalDiaries();
+          const { deduplicated } = deduplicateDiaries(refreshedLocal);
+          setDiaries(deduplicated);
+          const parts: string[] = [];
+          if (syncRes.addedCount > 0) parts.push(`새 일기 ${syncRes.addedCount}개 추가`);
+          if (syncRes.updatedCount > 0) parts.push(`업데이트 ${syncRes.updatedCount}개 반영`);
+          setToastMessage({
+            text: `서버에서 ${parts.join(', ')} 완료`,
+            type: 'success',
+          });
+          setTimeout(() => setToastMessage(null), 3000);
+        }
+      }
     } catch {
-      setCloudSyncStatus('offline');
-      setToastMessage({ text: '동기화 오류', type: 'error' });
-      setTimeout(() => setToastMessage(null), 2000);
+      setIsServerOnline(false);
+    } finally {
+      setIsCheckingServer(false);
     }
   };
 
   useEffect(() => {
-    if (isAdmin) {
-      const unsubscribe = subscribeVisitorLogs(setVisitorLogs);
-      handleTriggerSync();
-      return () => unsubscribe();
-    } else {
-      stopSyncQueue();
-    }
-  }, [isAdmin]);
+    let active = true;
+
+    const handleOnline = async () => {
+      if (!active) return;
+      const connected = await testFirestoreConnection();
+      if (active) setIsServerOnline(connected);
+      if (connected) {
+        refreshServerStatus();
+      }
+    };
+
+    const handleOffline = () => {
+      if (active) setIsServerOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Initial server connection check
+    testFirestoreConnection().then((ok) => {
+      if (active) setIsServerOnline(ok && (typeof navigator === 'undefined' ? true : navigator.onLine));
+    });
+
+    const unsubscribe = subscribeServerDiaryStatus(
+      (metaMap, fromCache) => {
+        if (!active) return;
+        setServerMetaMap(metaMap);
+        setHasLoadedServerMeta(true);
+        if (!fromCache && (typeof navigator === 'undefined' || navigator.onLine)) {
+          setIsServerOnline(true);
+        }
+      },
+      () => {
+        if (active && typeof navigator !== 'undefined' && !navigator.onLine) {
+          setIsServerOnline(false);
+        }
+      }
+    );
+
+    return () => {
+      active = false;
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      unsubscribe();
+    };
+  }, []);
 
   // Modals state
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -209,37 +275,45 @@ export default function App() {
       return;
     }
     const existingMatch = diaries.find((d) => isDiaryDuplicate(d, entry));
-    let targetEntry: DiaryEntry = { ...entry };
+    const targetEntry: DiaryEntry = { ...entry };
     let obsoleteIdToDelete: string | null = null;
     if (existingMatch) {
       targetEntry.id = existingMatch.id;
       targetEntry.views = Math.max(existingMatch.views || 0, entry.views || 0);
-      targetEntry.createdAt = existingMatch.createdAt || entry.createdAt;
+      targetEntry.createdAt = existingMatch.createdAt || (Date.now() - 3600000);
+      targetEntry.updatedAt = Date.now();
+      targetEntry.isModified = true;
       if (entry.id !== existingMatch.id) obsoleteIdToDelete = entry.id;
+    } else {
+      targetEntry.createdAt = targetEntry.createdAt || Date.now();
+      targetEntry.updatedAt = targetEntry.createdAt;
+      targetEntry.isModified = false;
     }
+
     setDiaries((prev) => {
       const filtered = prev.filter(d => d.id !== targetEntry.id && (!obsoleteIdToDelete || d.id !== obsoleteIdToDelete));
       return sortDiariesDescending([targetEntry, ...filtered]);
     });
+
     if (selectedDiary && (selectedDiary.id === targetEntry.id || (obsoleteIdToDelete && selectedDiary.id === obsoleteIdToDelete))) {
       setSelectedDiary(targetEntry);
     }
+
     if (obsoleteIdToDelete) {
       await deleteLocalDiary(obsoleteIdToDelete).catch(() => {});
-      await dequeueLocalSyncItem(obsoleteIdToDelete).catch(() => {});
     }
+
     try {
       await saveLocalDiary(targetEntry);
-      await enqueueLocalSyncItem('save', targetEntry.id, targetEntry);
-      setPendingSyncCount(await getLocalSyncQueueCount());
-    } catch {}
-    if (typeof navigator !== 'undefined' && navigator.onLine) {
-      try {
-        if (obsoleteIdToDelete) await deleteDiaryFromSQLite(obsoleteIdToDelete).catch(() => {});
-        await saveDiaryToSQLite(targetEntry);
-        await dequeueLocalSyncItem(targetEntry.id);
-        setPendingSyncCount(await getLocalSyncQueueCount());
-      } catch {}
+      setToastMessage({ text: '일기가 로컬 저장소에 저장되었습니다.', type: 'success' });
+      setTimeout(() => setToastMessage(null), 2500);
+    } catch (err: any) {
+      console.error('Failed to save to local database:', err);
+      setToastMessage({ 
+        text: `로컬 저장소 오류: ${err.message || '데이터베이스에 저장할 수 없습니다.'}`, 
+        type: 'error' 
+      });
+      setTimeout(() => setToastMessage(null), 5000);
     }
   };
 
@@ -251,32 +325,30 @@ export default function App() {
     if (selectedDiary && selectedDiary.id === targetId) setSelectedDiary(null);
     try {
       await deleteLocalDiary(targetId);
-      await enqueueLocalSyncItem('delete', targetId);
-      setPendingSyncCount(await getLocalSyncQueueCount());
-    } catch {}
-    if (typeof navigator !== 'undefined' && navigator.onLine) {
-      try {
-        await deleteDiaryFromSQLite(targetId);
-        await dequeueLocalSyncItem(targetId);
-        setPendingSyncCount(await getLocalSyncQueueCount());
-      } catch {}
+    } catch (err) {
+      console.error('Failed to delete local diary:', err);
     }
   };
 
   const handleSelectDiary = async (diary: DiaryEntry) => {
     const original = diaries.find((item) => item.id === diary.id) || diary;
-    setSelectedDiary(original);
     if (!isAdmin) {
-      incrementDiaryViewsSQLite(original.id).catch(console.warn);
+      const updated = { ...original, views: (original.views || 0) + 1 };
+      setSelectedDiary(updated);
+      setDiaries((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+      saveLocalDiary(updated).catch(() => {});
       recordVisitorLocation(original.id, original.title).catch(console.warn);
+    } else {
+      setSelectedDiary(original);
     }
   };
 
   const handleResetAllViews = async () => {
     if (!isAdmin) return;
     try {
-      setDiaries((prev) => prev.map((d) => ({ ...d, views: 0 })));
-      await resetAllDiaryViewsSQLite();
+      const resetList = diaries.map((d) => ({ ...d, views: 0 }));
+      setDiaries(resetList);
+      await saveMultipleLocalDiaries(resetList, true);
       setToastMessage({ text: '방문자 수 초기화 완료', type: 'success' });
       setTimeout(() => setToastMessage(null), 2000);
     } catch {}
@@ -297,6 +369,71 @@ export default function App() {
     return Math.round(dist * 10) / 10;
   }, [diaries]);
 
+  const handleUploadDiaryToServer = async (diary: DiaryEntry) => {
+    if (!isAdmin) {
+      openLoginModal('서버에 일기를 추가/수정하려면 관리자 로그인이 필요합니다.');
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setToastMessage({ text: '오프라인 상태에서는 서버에 반영할 수 없습니다.', type: 'error' });
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+
+    const originalId = diary.id;
+    const isExistingOnServer = Boolean(serverMetaMap[originalId]);
+
+    setUploadingDiaryIds((prev) => ({ ...prev, [originalId]: true }));
+    try {
+      const { updatedDiary, meta } = await upsertDiaryToFirestore(diary, { isExistingOnServer });
+
+      if (updatedDiary.id !== originalId) {
+        await deleteLocalDiary(originalId).catch(() => {});
+        await saveLocalDiary(updatedDiary);
+        setDiaries((prev) =>
+          sortDiariesDescending(prev.map((d) => (d.id === originalId ? updatedDiary : d)))
+        );
+        if (selectedDiary?.id === originalId) {
+          setSelectedDiary(updatedDiary);
+        }
+      }
+
+      setServerMetaMap((prev) => ({ ...prev, [meta.id]: meta }));
+      setHasLoadedServerMeta(true);
+      setIsServerOnline(true);
+
+      setToastMessage({
+        text: isExistingOnServer
+          ? `'${updatedDiary.title || '일기'}'가 서버에 업데이트되었습니다.`
+          : `'${updatedDiary.title || '일기'}'가 서버에 추가되었습니다.`,
+        type: 'success',
+      });
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (err: any) {
+      console.error('Failed to upload diary to Firestore:', err);
+      let readableMsg = err?.message || '잠시 후 다시 시도해주세요.';
+      if (typeof readableMsg === 'string' && readableMsg.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(readableMsg);
+          if (parsed?.error) readableMsg = parsed.error;
+        } catch {}
+      }
+      setToastMessage({
+        text: `서버 반영 실패: ${readableMsg}`,
+        type: 'error',
+      });
+      setTimeout(() => setToastMessage(null), 4500);
+    } finally {
+      setUploadingDiaryIds((prev) => {
+        const next = { ...prev };
+        delete next[originalId];
+        return next;
+      });
+    }
+  };
+
+  const serverDiariesCount = hasLoadedServerMeta ? Object.keys(serverMetaMap).length : null;
+
   const handleExportWithOptions = async (options: ExportOptions) => {
     const result = await exportDiariesWithOptions(diaries, options);
     if (result.count > 0) {
@@ -316,13 +453,14 @@ export default function App() {
         onOpenNewDiary={() => { setEditingDiary(null); setIsEditorOpen(true); }}
         onExportData={() => setIsExportModalOpen(true)}
         totalDiariesCount={diaries.length}
+        serverDiariesCount={serverDiariesCount}
+        isServerOnline={isServerOnline}
+        isCheckingServer={isCheckingServer}
+        onRefreshServerStatus={refreshServerStatus}
         totalViewsCount={isAdmin ? diaries.reduce((acc, d) => acc + (d.views || 0), 0) : undefined}
         visitorLogsCount={visitorLogs.length}
         onOpenVisitorModal={() => setIsVisitorModalOpen(true)}
         onOpenFlutterCode={() => setIsFlutterCodeOpen(true)}
-        cloudSyncStatus={cloudSyncStatus}
-        pendingSyncCount={pendingSyncCount}
-        onTriggerSync={handleTriggerSync}
       />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -354,6 +492,9 @@ export default function App() {
         {viewMode === 'blog' && (
           <BlogFeedView
             diaries={diaries}
+            serverMetaMap={serverMetaMap}
+            uploadingDiaryIds={uploadingDiaryIds}
+            onUploadDiaryToServer={handleUploadDiaryToServer}
             onSelectDiary={handleSelectDiary}
             onEditDiary={(d) => { setEditingDiary(d); setIsEditorOpen(true); }}
             onDeleteDiary={(d) => setDeleteTarget(d)}
@@ -361,8 +502,6 @@ export default function App() {
             onOpenNewDiary={() => { setEditingDiary(null); setIsEditorOpen(true); }}
             onResetAllViews={handleResetAllViews}
             onOpenVisitorModal={() => setIsVisitorModalOpen(true)}
-            onTriggerSync={handleTriggerSync}
-            cloudSyncStatus={cloudSyncStatus}
           />
         )}
 
@@ -404,6 +543,9 @@ export default function App() {
         onDelete={(d) => setDeleteTarget(d)}
         onViewOnMap={(d) => { setFocusedMapDiaryId(d.id); setViewMode('map'); }}
         onOpenPhotoLightbox={(photos, index) => { setLightboxPhotos(photos); setLightboxIndex(index); setIsLightboxOpen(true); }}
+        serverStatus={selectedDiary ? getDiaryServerStatus(selectedDiary, serverMetaMap) : 'not_on_server'}
+        isUploadingToServer={selectedDiary ? Boolean(uploadingDiaryIds[selectedDiary.id]) : false}
+        onUploadToServer={handleUploadDiaryToServer}
         onNextDiary={() => {
           const idx = diaries.findIndex(d => d.id === selectedDiary?.id);
           if (idx < diaries.length - 1) setSelectedDiary(diaries[idx + 1]);
@@ -412,8 +554,8 @@ export default function App() {
           const idx = diaries.findIndex(d => d.id === selectedDiary?.id);
           if (idx > 0) setSelectedDiary(diaries[idx - 1]);
         }}
-        hasNext={selectedDiary && diaries.findIndex(d => d.id === selectedDiary.id) < diaries.length - 1}
-        hasPrev={selectedDiary && diaries.findIndex(d => d.id === selectedDiary.id) > 0}
+        hasNext={!!selectedDiary && diaries.findIndex(d => d.id === selectedDiary.id) < diaries.length - 1}
+        hasPrev={!!selectedDiary && diaries.findIndex(d => d.id === selectedDiary.id) > 0}
       />
       <PhotoLightbox
         isOpen={isLightboxOpen}
@@ -443,21 +585,80 @@ export default function App() {
         finally { setIsDownloadingFlutter(false); }
       }} />
       {isVisitorModalOpen && isAdmin && <VisitorLocationModal isOpen={isVisitorModalOpen} onClose={() => setIsVisitorModalOpen(false)} visitorLogs={visitorLogs} />}
-      <ExportModal 
+      <DataManagementModal 
         isOpen={isExportModalOpen} 
         onClose={() => setIsExportModalOpen(false)} 
         diaries={diaries} 
         onExport={handleExportWithOptions} 
+        onImport={async (importedDiaries) => {
+          if (!isAdmin) {
+            throw new Error('관리자 권한이 필요합니다.');
+          }
+
+          let addedCount = 0;
+          let updatedCount = 0;
+          const toSave: DiaryEntry[] = [];
+
+          for (const item of importedDiaries) {
+            const normalized: DiaryEntry = {
+              ...item,
+              location: item.location || { lat: 0, lng: 0, address: '', region: '알 수 없음' },
+              photos: item.photos || [],
+              moodTags: item.moodTags || (item as any).mood_tags || [],
+              localInsights: item.localInsights || (item as any).local_insights || { recommendedForSolo: '' },
+              createdAt: item.createdAt || Date.now(),
+              updatedAt: item.updatedAt || Date.now(),
+            };
+
+            const existing = diaries.find(d => d.id === normalized.id);
+            if (existing) {
+              updatedCount++;
+            } else {
+              addedCount++;
+            }
+            toSave.push(normalized);
+          }
+
+          if (toSave.length > 0) {
+            await saveMultipleLocalDiaries(toSave, true);
+            const fresh = await getAllLocalDiaries();
+            setDiaries(sortDiariesDescending(fresh));
+          }
+
+          return { addedCount, updatedCount, total: toSave.length };
+        }}
+        onResetLocalDb={async () => {
+          if (!isAdmin) return;
+          try {
+            await clearLocalDb();
+            localStorage.removeItem('hills_travel_diaries_v4');
+            localStorage.removeItem('hills_travel_sync_queue_v4');
+            localStorage.removeItem('hills_travel_idb_migrated_v5');
+            localStorage.removeItem('hills_blog_diaries_v2');
+
+            setDiaries([]);
+            setToastMessage({ text: '로컬 저장소가 초기화되었습니다.', type: 'success' });
+            setTimeout(() => setToastMessage(null), 3000);
+          } catch (err: any) {
+            setToastMessage({ text: `초기화 실패: ${err.message}`, type: 'error' });
+          }
+        }}
       />
-      
-      {toastMessage && (
+
+      {(toastMessage || downloadNotification) && (
         <div className={`fixed top-18 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl border flex items-center gap-2 backdrop-blur-md animate-in fade-in slide-in-from-top-3 duration-200 max-w-[90vw] ${
-          toastMessage.type === 'success' ? 'bg-stone-900/95 text-emerald-300 border-emerald-800/60' : toastMessage.type === 'info' ? 'bg-stone-900/95 text-amber-300 border-amber-600/60' : 'bg-rose-950/95 text-rose-200 border-rose-800/80'
+          toastMessage?.type === 'error' ? 'bg-rose-950/95 text-rose-200 border-rose-800/80' :
+          toastMessage?.type === 'info' ? 'bg-stone-900/95 text-amber-300 border-amber-600/60' :
+          'bg-stone-900/95 text-emerald-300 border-emerald-800/60'
         }`}>
-          {toastMessage.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-          {toastMessage.type === 'info' && <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />}
-          {toastMessage.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />}
-          <span className="truncate">{toastMessage.text}</span>
+          {toastMessage?.type === 'error' ? (
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+          ) : toastMessage?.type === 'info' ? (
+            <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          )}
+          <span className="truncate">{toastMessage?.text || (isDownloadingFlutter ? 'Flutter 프로젝트 생성 중...' : downloadNotification)}</span>
         </div>
       )}
     </div>

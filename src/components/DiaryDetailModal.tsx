@@ -27,10 +27,14 @@ import {
   Loader2,
   Eye,
   Users,
-  Camera
+  Camera,
+  CloudOff,
+  CheckCircle2,
+  RefreshCw,
+  Upload
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { isDiaryPendingSync } from '../utils/syncManager';
+import { ServerDiarySyncStatus } from '../services/diaryFirestore';
 
 interface DiaryDetailModalProps {
   diary: DiaryEntry | null;
@@ -40,6 +44,9 @@ interface DiaryDetailModalProps {
   onDelete: (diary: DiaryEntry) => void;
   onViewOnMap: (diary: DiaryEntry) => void;
   onOpenPhotoLightbox: (photos: DiaryEntry['photos'], index: number) => void;
+  serverStatus?: ServerDiarySyncStatus;
+  isUploadingToServer?: boolean;
+  onUploadToServer?: (diary: DiaryEntry) => void;
   onNextDiary?: () => void;
   onPrevDiary?: () => void;
   hasNext?: boolean;
@@ -54,6 +61,9 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   onDelete,
   onViewOnMap,
   onOpenPhotoLightbox,
+  serverStatus = 'not_on_server',
+  isUploadingToServer = false,
+  onUploadToServer,
   onNextDiary,
   onPrevDiary,
   hasNext = false,
@@ -134,6 +144,7 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   useEffect(() => {
     if (!isOpen || !diary) return;
 
+    let resizeObserver: ResizeObserver | null = null;
     const timer = setTimeout(() => {
       if (!mapContainerRef.current) return;
 
@@ -145,7 +156,7 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
       const map = L.map(mapContainerRef.current, {
         center: [diary.location.lat, diary.location.lng],
         zoom: 14,
-        zoomControl: false,
+        zoomControl: true,
         attributionControl: false,
       });
 
@@ -167,10 +178,22 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
 
       L.marker([diary.location.lat, diary.location.lng], { icon: pinIcon }).addTo(map);
       mapInstanceRef.current = map;
-    }, 150);
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 100);
+
+      if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+        resizeObserver = new ResizeObserver(() => {
+          map.invalidateSize();
+        });
+        resizeObserver.observe(mapContainerRef.current);
+      }
+    }, 250);
 
     return () => {
       clearTimeout(timer);
+      if (resizeObserver) resizeObserver.disconnect();
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -260,6 +283,48 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
               </button>
             )}
 
+            {/* Per-diary Server Status & Add/Update Button */}
+            {onUploadToServer && (
+              <button
+                type="button"
+                onClick={() => onUploadToServer(diary)}
+                disabled={isUploadingToServer}
+                className={`px-2 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-60 ${
+                  serverStatus === 'not_on_server'
+                    ? 'bg-rose-600/25 hover:bg-rose-600/40 text-rose-300 border-rose-500/60'
+                    : serverStatus === 'needs_update'
+                      ? 'bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 border-amber-500/60'
+                      : 'bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border-emerald-500/50'
+                }`}
+                title={
+                  serverStatus === 'not_on_server'
+                    ? '서버 미등록 - 클릭하여 서버에 추가'
+                    : serverStatus === 'needs_update'
+                      ? '수정됨 - 클릭하여 서버에 업데이트'
+                      : '서버에 추가/업데이트 완료됨'
+                }
+              >
+                {isUploadingToServer ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : serverStatus === 'not_on_server' ? (
+                  <CloudOff className="w-3.5 h-3.5 text-rose-400" />
+                ) : serverStatus === 'needs_update' ? (
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                )}
+                <span className="hidden sm:inline">
+                  {isUploadingToServer
+                    ? '반영 중...'
+                    : serverStatus === 'not_on_server'
+                      ? '서버 추가'
+                      : serverStatus === 'needs_update'
+                        ? '서버 업데이트'
+                        : '서버 반영됨'}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleShare}
@@ -270,38 +335,31 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
               <span className="hidden sm:inline">{copied ? t('btnShared') : t('btnShare')}</span>
             </button>
 
-            {/* Admin only actions: Edit & Delete (Allowed only when online & synchronized) */}
-            {isAdmin && (() => {
-              const isLocked = isDiaryPendingSync(diary.id) || (typeof navigator !== 'undefined' && !navigator.onLine);
-              return (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onEdit(diary)}
-                    className={`p-1.5 rounded-lg transition text-xs flex items-center gap-1 cursor-pointer ${
-                      isLocked ? 'text-stone-500 hover:text-amber-400 hover:bg-stone-800/80' : 'text-stone-400 hover:text-white hover:bg-stone-800'
-                    }`}
-                    title={isLocked ? '수정은 서버와 연결되고 동기화가 완료된 상태에서만 가능합니다' : t('cardEdit')}
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    <span className="hidden sm:inline">{t('cardEdit')}</span>
-                  </button>
+            {/* Admin only actions: Edit & Delete */}
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onEdit(diary)}
+                  className="p-1.5 rounded-lg transition text-xs flex items-center gap-1 cursor-pointer text-stone-400 hover:text-white hover:bg-stone-800"
+                  title={t('cardEdit')}
+                >
+                  <Edit3 className="w-4 h-4" />
+                  <span className="hidden sm:inline">{t('cardEdit')}</span>
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onDelete(diary);
-                    }}
-                    className={`p-1.5 rounded-lg transition text-xs cursor-pointer ${
-                      isLocked ? 'text-stone-500 hover:text-rose-400 hover:bg-stone-800/80' : 'text-stone-400 hover:text-rose-400 hover:bg-stone-800'
-                    }`}
-                    title={isLocked ? '삭제는 서버와 연결되고 동기화가 완료된 상태에서만 가능합니다' : t('cardDelete')}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </>
-              );
-            })()}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDelete(diary);
+                  }}
+                  className="p-1.5 rounded-lg transition text-xs cursor-pointer text-stone-400 hover:text-rose-400 hover:bg-stone-800"
+                  title={t('cardDelete')}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </>
+            )}
 
             <div className="w-px h-4 bg-stone-700 mx-1" />
 

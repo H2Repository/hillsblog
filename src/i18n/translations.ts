@@ -74,7 +74,7 @@ export const translations = {
     allDiariesLoaded: '모든 일기를 불러왔습니다',
     
     // Diary Card
-    cardViewOnMap: '지도에서 위치 보기',
+    cardViewOnMap: '위치 보기',
     cardEdit: '일기 수정',
     cardDelete: '일기 삭제',
     cardWhyRecommend: '코스 추천 이유',

@@ -194,7 +194,21 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
 
     mapInstanceRef.current = map;
 
+    // Fix for "gray map" issue: invalidate size after a short delay and observe container resize
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 150);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        map.invalidateSize();
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
     return () => {
+      if (resizeObserver) resizeObserver.disconnect();
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -406,8 +420,8 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
   return (
     <div className="relative w-full h-[calc(100vh-140px)] min-h-[550px] bg-stone-100 flex flex-col md:flex-row overflow-hidden rounded-2xl border border-stone-300/80 shadow-lg">
       {/* Map Container */}
-      <div className="relative flex-1 h-2/3 md:h-full w-full">
-        <div ref={mapContainerRef} className="w-full h-full z-0" />
+      <div className="relative flex-1 min-h-[340px] h-2/3 md:h-full w-full">
+        <div ref={mapContainerRef} className="w-full h-full min-h-[340px] z-0" />
 
         {/* Floating Quick Locate & Visitor Location Controls */}
         <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 items-end">

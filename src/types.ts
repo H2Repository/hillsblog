@@ -47,11 +47,10 @@ export interface DiaryEntry {
   includeInDistance?: boolean;
   createdAt: number;
   updatedAt: number;
+  isModified?: boolean;
 }
 
 export type ViewMode = 'blog' | 'map' | 'timeline';
-
-export type CloudSyncStatus = 'syncing' | 'connected' | 'offline' | 'limit';
 
 export interface VisitorLog {
   id: string;

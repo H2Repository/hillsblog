@@ -31,7 +31,8 @@ import {
   Image as ImageIcon,
   Tag,
   AlertCircle,
-  RotateCcw
+  RotateCcw,
+  WifiOff
 } from 'lucide-react';
 
 interface DiaryEditorModalProps {
@@ -95,6 +96,22 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   const [rating, setRating] = useState(5);
   const [moodTags, setMoodTags] = useState<string[]>(['#나홀로여행', '#힐링산책']);
   const [tagInput, setTagInput] = useState('');
+
+  // Offline detection state
+  const [isOffline, setIsOffline] = useState(() => {
+    return typeof navigator !== 'undefined' ? !navigator.onLine : false;
+  });
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Location State
   const [location, setLocation] = useState<GeoLocation>({
@@ -203,6 +220,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
+    let resizeObserver: ResizeObserver | null = null;
     const timer = setTimeout(() => {
       if (!miniMapContainerRef.current) return;
 
@@ -211,8 +229,11 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         miniMapRef.current = null;
       }
 
+      const initialLat = typeof location.lat === 'number' && !isNaN(location.lat) ? location.lat : 33.4619;
+      const initialLng = typeof location.lng === 'number' && !isNaN(location.lng) ? location.lng : 126.3113;
+
       const map = L.map(miniMapContainerRef.current, {
-        center: [location.lat, location.lng],
+        center: [initialLat, initialLng],
         zoom: 13,
         zoomControl: true,
       });
@@ -233,7 +254,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         iconAnchor: [16, 32],
       });
 
-      const marker = L.marker([location.lat, location.lng], {
+      const marker = L.marker([initialLat, initialLng], {
         icon: pinIcon,
         draggable: true,
       }).addTo(map);
@@ -250,10 +271,22 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
 
       miniMapRef.current = map;
       miniMarkerRef.current = marker;
-    }, 150);
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 100);
+
+      if (typeof ResizeObserver !== 'undefined' && miniMapContainerRef.current) {
+        resizeObserver = new ResizeObserver(() => {
+          map.invalidateSize();
+        });
+        resizeObserver.observe(miniMapContainerRef.current);
+      }
+    }, 250);
 
     return () => {
       clearTimeout(timer);
+      if (resizeObserver) resizeObserver.disconnect();
       if (miniMapRef.current) {
         miniMapRef.current.remove();
         miniMapRef.current = null;
@@ -269,8 +302,8 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         ...prev,
         lat,
         lng,
-        address: info.address,
-        region: info.region,
+        address: info.address || prev.address,
+        region: info.region || prev.region,
         landmark: info.landmark || prev.landmark,
         isRealtimeGps: isRealtime,
       }));
@@ -284,6 +317,36 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
     } finally {
       setIsGpsLoading(false);
     }
+  };
+
+  const manualGeocodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleManualCoordChange = (type: 'lat' | 'lng', val: string) => {
+    const num = parseFloat(val);
+    if (isNaN(num)) {
+      setLocation(prev => ({ ...prev, [type]: val }));
+      return;
+    }
+
+    const newLoc = { ...location, [type]: num, isRealtimeGps: false };
+    setLocation(newLoc);
+
+    if (miniMapRef.current && miniMarkerRef.current) {
+      miniMapRef.current.setView([newLoc.lat, newLoc.lng], miniMapRef.current.getZoom());
+      miniMarkerRef.current.setLatLng([newLoc.lat, newLoc.lng]);
+      // Small delay to ensure container sizing is correct if called during state transitions
+      setTimeout(() => {
+        miniMapRef.current?.invalidateSize();
+      }, 50);
+    }
+
+    // Debounced reverse geocoding to auto-fill address fields from manual coordinates
+    if (manualGeocodeTimerRef.current) clearTimeout(manualGeocodeTimerRef.current);
+    manualGeocodeTimerRef.current = setTimeout(async () => {
+      if (!isNaN(newLoc.lat) && !isNaN(newLoc.lng)) {
+        await updateLocationFromCoords(newLoc.lat, newLoc.lng, false);
+      }
+    }, 1500); // 1.5s delay to wait for user to finish typing
   };
 
   const handleAutoFetchGps = async () => {
@@ -478,8 +541,9 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
       rating,
       views: initialEntry?.views ?? 0,
       includeInDistance: location.includeInDistance !== false,
-      createdAt: initialEntry ? initialEntry.createdAt : Date.now(),
+      createdAt: initialEntry ? (initialEntry.createdAt || (Date.now() - 3600000)) : Date.now(),
       updatedAt: Date.now(),
+      isModified: Boolean(initialEntry),
     };
 
     onSave(newDiary);
@@ -494,15 +558,36 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         {/* Header */}
         <div className="px-3.5 sm:px-6 py-3 sm:py-4 bg-stone-900 text-white flex items-center justify-between border-b border-stone-800 gap-2">
           <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-600 flex items-center justify-center text-white shrink-0">
-              <Compass className="w-4 h-4 sm:w-5 sm:h-5" />
+            <div 
+              className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-white shrink-0 transition-all ${
+                isOffline 
+                  ? 'bg-rose-600 ring-2 ring-rose-500/60 shadow-lg shadow-rose-950/60' 
+                  : 'bg-amber-600'
+              }`}
+              title={isOffline ? 'Off Mode (오프라인 모드)' : '새로운 여행 일기 쓰기'}
+            >
+              {isOffline ? (
+                <WifiOff className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+              ) : (
+                <Compass className="w-4 h-4 sm:w-5 sm:h-5" />
+              )}
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm sm:text-lg font-bold truncate">
-                {initialEntry ? '여행 일기 수정' : '새로운 여행 일기 쓰기'}
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm sm:text-lg font-bold truncate">
+                  {initialEntry ? '여행 일기 수정' : '새로운 여행 일기 쓰기'}
+                </h2>
+                {isOffline && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shadow-xs flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                    Off Mode
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-stone-400 hidden sm:block">
-                실시간 위치와 사진을 연동하여 오늘의 여행 순간을 기록하세요
+                {isOffline 
+                  ? '인터넷 연결이 없는 Off Mode 상태입니다. 작성한 일기는 로컬 기기에 안전하게 저장됩니다.'
+                  : '실시간 위치와 사진을 연동하여 오늘의 여행 순간을 기록하세요'}
               </p>
             </div>
           </div>
@@ -627,12 +712,31 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                       className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-stone-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                     />
                   </div>
-                  <div className="w-24 sm:w-28 shrink-0">
+                  <div className="w-full sm:w-auto flex-1">
                     <label className="block text-xs font-medium text-stone-700 mb-1">
-                      좌표
+                      좌표 (위도, 경도)
                     </label>
-                    <div className="text-[10px] sm:text-[11px] text-stone-600 bg-stone-100 px-2 py-2 sm:py-2.5 rounded-lg border border-stone-200 truncate">
-                      {location.lat.toFixed(3)}, {location.lng.toFixed(3)}
+                    <div className="flex gap-1">
+                      <div className="relative flex-1">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[9px] font-bold text-stone-400">LAT</span>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          value={location.lat}
+                          onChange={(e) => handleManualCoordChange('lat', e.target.value)}
+                          className="w-full pl-8 pr-2 py-2 text-[11px] rounded-lg border border-stone-300 bg-white focus:ring-2 focus:ring-amber-500/50"
+                        />
+                      </div>
+                      <div className="relative flex-1">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[9px] font-bold text-stone-400">LNG</span>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          value={location.lng}
+                          onChange={(e) => handleManualCoordChange('lng', e.target.value)}
+                          className="w-full pl-8 pr-2 py-2 text-[11px] rounded-lg border border-stone-300 bg-white focus:ring-2 focus:ring-amber-500/50"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

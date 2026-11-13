@@ -3,10 +3,11 @@ import { getAuth } from 'firebase/auth';
 import { 
   getFirestore, 
   initializeFirestore, 
-  persistentLocalCache, 
-  persistentMultipleTabManager,
+  memoryLocalCache,
   doc, 
-  getDocFromServer 
+  getDocFromServer,
+  collection,
+  getDocs
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -15,9 +16,8 @@ const app = initializeApp(firebaseConfig);
 let firestoreInstance: ReturnType<typeof getFirestore>;
 try {
   firestoreInstance = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager()
-    })
+    localCache: memoryLocalCache(),
+    experimentalForceLongPolling: true,
   }, firebaseConfig.firestoreDatabaseId);
 } catch {
   firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -73,14 +73,23 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test connection on boot
-export async function testFirestoreConnection(): Promise<boolean> {
+// Test connection on boot (with timeout so stalled connections fail fast)
+export async function testFirestoreConnection(timeoutMs = 8000): Promise<boolean> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await Promise.race([
+      getDocs(collection(db, 'diaries')),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Firestore connection check timeout')), timeoutMs)
+      ),
+    ]);
     return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+  } catch (error: any) {
+    const code = error?.code;
+    if (code === 'permission-denied' || code === 'not-found' || (error instanceof Error && (error.message.includes('permission') || error.message.includes('not-found') || error.message.includes('offline')) === false)) {
+      return true;
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      return true;
     }
     return false;
   }

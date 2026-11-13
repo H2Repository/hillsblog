@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { DiaryEntry, CloudSyncStatus } from '../types';
+import { DiaryEntry } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { getLocalizedDiary } from '../utils/translationService';
 import { useTranslationVersion } from '../utils/translationService';
@@ -29,17 +29,23 @@ import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   RotateCcw,
-  Loader2
+  Loader2,
+  CloudOff,
+  CheckCircle2,
+  RefreshCw
 } from 'lucide-react';
 import { calculateDistanceKm } from '../utils/geo';
 import { useAuth } from '../context/AuthContext';
-import { isDiaryPendingSync } from '../utils/syncManager';
+import { getDiaryServerStatus, ServerDiaryMeta } from '../services/diaryFirestore';
 
-const INITIAL_VISIBLE_COUNT = 4;
-const PAGE_SIZE = 4;
+const INITIAL_VISIBLE_COUNT = 10;
+const PAGE_SIZE = 10;
 
 interface BlogFeedViewProps {
   diaries: DiaryEntry[];
+  serverMetaMap: Record<string, ServerDiaryMeta>;
+  uploadingDiaryIds: Record<string, boolean>;
+  onUploadDiaryToServer: (diary: DiaryEntry) => void;
   onSelectDiary: (diary: DiaryEntry) => void;
   onEditDiary: (diary: DiaryEntry) => void;
   onDeleteDiary: (diary: DiaryEntry) => void;
@@ -47,12 +53,13 @@ interface BlogFeedViewProps {
   onOpenNewDiary: () => void;
   onResetAllViews?: () => void;
   onOpenVisitorModal?: () => void;
-  onTriggerSync?: () => void;
-  cloudSyncStatus?: CloudSyncStatus;
 }
 
 export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
   diaries,
+  serverMetaMap,
+  uploadingDiaryIds,
+  onUploadDiaryToServer,
   onSelectDiary,
   onEditDiary,
   onDeleteDiary,
@@ -60,8 +67,6 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
   onOpenNewDiary,
   onResetAllViews,
   onOpenVisitorModal,
-  onTriggerSync,
-  cloudSyncStatus = 'connected',
 }) => {
   const { t, language } = useLanguage();
   const { isAdmin, openLoginModal } = useAuth();
@@ -344,6 +349,9 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {displayedDiaries.map((diary) => {
+            const originalDiary = diaries.find((item) => item.id === diary.id) || diary;
+            const serverStatus = getDiaryServerStatus(originalDiary, serverMetaMap);
+            const isUploading = Boolean(uploadingDiaryIds[originalDiary.id]);
             const coverPhoto = diary.photos.find((p) => p.isCover) || diary.photos[0];
             const WeatherIcon = weatherIcons[diary.weather]?.icon || Sun;
 
@@ -450,17 +458,19 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         )}
                       </div>
 
-                      <div className="flex items-center">
-                        {[1, 2, 3, 4, 5].map((s) => (
-                          <Star
-                            key={s}
-                            className={`w-3 h-3 ${
-                              s <= diary.rating
-                                ? 'text-amber-500 fill-amber-500'
-                                : 'text-stone-300'
-                            }`}
-                          />
-                        ))}
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center">
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Star
+                              key={s}
+                              className={`w-3 h-3 ${
+                                s <= diary.rating
+                                  ? 'text-amber-500 fill-amber-500'
+                                  : 'text-stone-300'
+                              }`}
+                            />
+                          ))}
+                        </div>
                       </div>
                     </div>
 
@@ -502,61 +512,91 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                   )}
 
                   {/* Card Actions Footer */}
-                  <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
-                    <div className="flex items-center gap-1">
+                  <div className="pt-3 border-t border-stone-100 flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1 flex-wrap">
                       <button
                         type="button"
                         onClick={() => {
-                          const original = diaries.find(item => item.id === diary.id) || diary;
-                          onViewOnMap(original);
+                          onViewOnMap(originalDiary);
                         }}
-                        className="text-xs font-semibold text-amber-700 hover:text-amber-800 px-2 py-1 rounded hover:bg-amber-50 transition flex items-center gap-1"
+                        className="text-xs font-semibold text-amber-700 hover:text-amber-800 px-2 py-1 rounded hover:bg-amber-50 transition flex items-center gap-1 cursor-pointer"
                         title={t('cardViewOnMap')}
                       >
                         <MapPin className="w-3.5 h-3.5" />
                         <span>{t('cardViewOnMap')}</span>
                       </button>
 
-                      {/* Admin-only Actions: Edit & Delete (Allowed only when online & synchronized) */}
-                      {isAdmin && (() => {
-                        const isLocked = isDiaryPendingSync(diary.id) || (typeof navigator !== 'undefined' && !navigator.onLine);
-                        return (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const original = diaries.find(item => item.id === diary.id) || diary;
-                                onEditDiary(original);
-                              }}
-                              className={`p-1.5 rounded transition ${
-                                isLocked 
-                                  ? 'text-stone-300 hover:text-amber-600 hover:bg-stone-50' 
-                                  : 'text-stone-400 hover:text-stone-700 hover:bg-stone-100'
-                              }`}
-                              title={isLocked ? '수정은 서버와 연결되고 동기화가 완료된 상태에서만 가능합니다' : t('cardEdit')}
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                      {/* Server Status Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUploadDiaryToServer(originalDiary);
+                        }}
+                        disabled={isUploading}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-bold transition cursor-pointer disabled:opacity-60 ${
+                          serverStatus === 'not_on_server'
+                            ? 'bg-rose-50 text-rose-600 border-rose-300 hover:bg-rose-100'
+                            : serverStatus === 'needs_update'
+                              ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                        }`}
+                        title={
+                          serverStatus === 'not_on_server'
+                            ? '서버 미등록 - 클릭하여 서버에 추가'
+                            : serverStatus === 'needs_update'
+                              ? '수정됨 - 클릭하여 서버 업데이트'
+                              : '서버에 추가/업데이트 완료됨'
+                        }
+                        aria-label="서버 반영 상태"
+                      >
+                        {isUploading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : serverStatus === 'not_on_server' ? (
+                          <CloudOff className="w-3.5 h-3.5 text-rose-600" />
+                        ) : serverStatus === 'needs_update' ? (
+                          <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        )}
+                        <span>
+                          {isUploading
+                            ? '전송 중'
+                            : serverStatus === 'not_on_server'
+                              ? '미등록'
+                              : serverStatus === 'needs_update'
+                                ? '수정됨'
+                                : '서버됨'}
+                        </span>
+                      </button>
 
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const original = diaries.find(item => item.id === diary.id) || diary;
-                                onDeleteDiary(original);
-                              }}
-                              className={`p-1.5 rounded transition ${
-                                isLocked 
-                                  ? 'text-stone-300 hover:text-rose-500 hover:bg-rose-50' 
-                                  : 'text-stone-400 hover:text-rose-600 hover:bg-rose-50'
-                              }`}
-                              title={isLocked ? '삭제는 서버와 연결되고 동기화가 완료된 상태에서만 가능합니다' : t('cardDelete')}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        );
-                      })()}
+                      {/* Admin-only Actions: Edit & Delete */}
+                      {isAdmin && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onEditDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
+                            title={t('cardEdit')}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition text-stone-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                            title={t('cardDelete')}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
                     </div>
 
                     <button
@@ -607,18 +647,18 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
         /* Empty State */
         <div className="bg-white rounded-2xl border border-dashed border-stone-300 p-12 text-center max-w-lg mx-auto space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-            {cloudSyncStatus === 'syncing' && diaries.length === 0 ? <Loader2 className="w-6 h-6 animate-spin" /> : <Compass className="w-6 h-6" />}
+            <Compass className="w-6 h-6" />
           </div>
           <div>
             <h3 className="text-base font-bold text-stone-900">
-              {cloudSyncStatus === 'syncing' && diaries.length === 0 ? "서버에서 일기를 불러오는 중입니다..." : t('noDiariesFound')}
+              일기를 찾을 수 없습니다
             </h3>
             <p className="text-xs text-stone-500 mt-1">
-              {cloudSyncStatus === 'syncing' && diaries.length === 0 ? "인터넷 환경에 따라 잠시 시간이 걸릴 수 있습니다." : t('noDiariesGuide')}
+              검색 결과가 없거나 저장된 일기가 없습니다. 새 일기를 작성하거나 JSON 백업 파일을 가져와 보세요.
             </p>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            {cloudSyncStatus !== 'syncing' && (isAdmin ? (
+            {isAdmin ? (
               <button
                 type="button"
                 onClick={onOpenNewDiary}
@@ -635,17 +675,6 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
               >
                 <Lock className="w-4 h-4" />
                 <span>관리자 로그인 후 작성</span>
-              </button>
-            ))}
-
-            {onTriggerSync && (
-              <button
-                type="button"
-                onClick={onTriggerSync}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 text-xs font-semibold shadow-sm transition cursor-pointer"
-              >
-                {cloudSyncStatus === 'syncing' ? <Loader2 className="w-4 h-4 animate-spin text-amber-600" /> : <RotateCcw className="w-4 h-4 text-amber-600" />}
-                <span>{cloudSyncStatus === 'syncing' ? "동기화 시도 중..." : "서버에서 다시 불러오기"}</span>
               </button>
             )}
           </div>

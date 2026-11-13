@@ -52,13 +52,10 @@ export function normalizeTitle(title?: string): string {
  */
 export function isDiaryDuplicate(a: DiaryEntry, b: DiaryEntry): boolean {
   if (!a || !b) return false;
-  if (a.id && b.id && a.id === b.id) return true;
-  if (a.date && b.date && a.date === b.date) {
-    const normA = normalizeTitle(a.title);
-    const normB = normalizeTitle(b.title);
-    if (normA.length > 0 && normA === normB) {
-      return true;
-    }
+  // Primarily rely on unique IDs. 
+  // Title/Date matching is too aggressive and causes data loss if multiple entries share generic titles.
+  if (a.id && b.id) {
+    return a.id === b.id;
   }
   return false;
 }
@@ -189,16 +186,61 @@ export interface ExportOptions {
 }
 
 /**
- * Checks if a diary has been modified after creation within the last 2 weeks (14 days)
+ * Safely parses a timestamp from a number, string, or date into epoch milliseconds
+ */
+export function parseTimestamp(val: unknown): number | null {
+  if (typeof val === 'number' && !isNaN(val) && val > 0) {
+    return val < 10000000000 ? val * 1000 : val;
+  }
+  if (typeof val === 'string' && val.trim()) {
+    const num = Number(val);
+    if (!isNaN(num) && num > 0) {
+      return num < 10000000000 ? num * 1000 : num;
+    }
+    const parsed = Date.parse(val);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+/**
+ * Checks if a diary has been modified AFTER being added to the server (not a newly added diary).
+ * - Addition (새로 추가된 일기): createdAt === updatedAt (diff <= 1000ms) or isModified === false. This is NOT a modification.
+ * - Modification (서버에 추가된 후 수정이 있었던 일기):
+ *   1) Explicitly marked with isModified === true
+ *   2) OR updatedAt is newer than createdAt by more than 1000ms (1 second)
+ *   3) AND the modification occurred within the specified days (default 14 days / 2 weeks)
  */
 export function isDiaryModified(d: DiaryEntry, withinDays = 14): boolean {
-  if (!d.updatedAt || !d.createdAt) return false;
-  const wasModified = d.updatedAt - d.createdAt > 1000;
-  if (!wasModified) return false;
+  if (!d) return false;
 
+  // If explicitly declared as not modified (e.g. brand new addition)
+  if (d.isModified === false) return false;
+
+  const updated = parseTimestamp(d.updatedAt);
+  const created = parseTimestamp(d.createdAt);
+
+  // Must have an update timestamp
+  if (!updated) return false;
+
+  // Must be modified within the last 2 weeks (14 days)
   const now = Date.now();
   const cutoffTime = now - withinDays * 24 * 60 * 60 * 1000;
-  return d.updatedAt >= cutoffTime;
+  if (updated < cutoffTime) return false;
+
+  // Definition: Modification is NOT an addition; it must be a modification AFTER being added to the server.
+  if (d.isModified === true) {
+    return true;
+  }
+
+  // If created timestamp exists, check that it was modified after initial addition
+  if (created) {
+    return (updated - created) > 1000;
+  }
+
+  return false;
 }
 
 /**
@@ -238,15 +280,16 @@ export async function exportDiariesWithOptions(
   options: ExportOptions
 ): Promise<{ count: number; success: boolean; fileName: string }> {
   const filtered = filterDiariesForExport(diaries, options);
-  const nowStr = new Date().toISOString().slice(0, 10);
+  const nowStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const count = filtered.length;
 
-  let fileName = `hills_diaries_전체_${nowStr}.json`;
+  let fileName = `travel_diaries_전체_${nowStr}(${count}).json`;
   if (options.mode === 'modified') {
-    fileName = `hills_diaries_수정된일기_${nowStr}.json`;
+    fileName = `travel_diaries_수정_${nowStr}(${count}).json`;
   } else if (options.mode === 'range') {
-    const start = options.startDate || nowStr;
-    const end = options.endDate || nowStr;
-    fileName = `hills_diaries_${start}_${end}.json`;
+    const start = (options.startDate || '').replace(/-/g, '');
+    const end = (options.endDate || '').replace(/-/g, '');
+    fileName = `travel_diaries_${start}_${end}(${count}).json`;
   }
 
   if (filtered.length === 0) {
