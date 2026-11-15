@@ -17,18 +17,13 @@ import {
   X,
   Wifi,
   WifiOff,
-  RefreshCw,
-  Smartphone,
-  Share2,
-  PlusSquare,
-  Check
+  RefreshCw
 } from 'lucide-react';
 import { getCurrentGpsPosition, reverseGeocode } from '../utils/geo';
 import { useLanguage } from '../context/LanguageContext';
 import { LanguageSelector } from './LanguageSelector';
 import { useAuth } from '../context/AuthContext';
 import { FlutterIcon } from './FlutterIcon';
-import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface NavbarProps {
   viewMode: ViewMode;
@@ -70,8 +65,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const isOffline = !isServerOnline;
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
-  const [showPWAInstallGuide, setShowPWAInstallGuide] = useState(false);
 
   // Close hamburger menu when clicking outside or pressing Escape
   useEffect(() => {
@@ -129,7 +122,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               isOffline ? 'border-rose-500 ring-2 ring-rose-500/60 shadow-rose-950/50' : 'border-amber-500/30 shadow-amber-900/30'
             }`}>
               <img 
-                src="assets/aistudio/bicycle_journey_icon.png" 
+                src="/icon.png" 
                 alt="App Icon" 
                 className="w-full h-full object-cover" 
               />
@@ -426,40 +419,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                     </button>
 
-                    {/* 홈 화면에 앱 설치하기 (PWA) */}
-                    {!isInstalled && (
-                      <button
-                        id="btn-menu-pwa-install"
-                        type="button"
-                        onClick={() => {
-                          if (isInstallable) {
-                            setIsMenuOpen(false);
-                            install();
-                          } else {
-                            setShowPWAInstallGuide(true);
-                          }
-                        }}
-                        className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-stone-800 text-left transition group cursor-pointer border border-transparent hover:border-stone-700"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-stone-800 group-hover:bg-amber-600/20 flex items-center justify-center text-amber-400 border border-stone-700 group-hover:border-amber-500/40 transition shrink-0">
-                          <Smartphone className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-1">
-                            <p className="text-xs font-bold text-white group-hover:text-amber-300 transition">
-                              홈 화면에 앱 설치하기
-                            </p>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-medium">
-                              오프라인 지원
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-stone-400 truncate">
-                            스마트폰 홈 화면에 추가하여 인터넷 없이도 바로 실행
-                          </p>
-                        </div>
-                      </button>
-                    )}
-
                     {/* 관리자 전용: Flutter 모바일 앱 다운로드 */}
                     {isAdmin && (
                       <button
@@ -508,6 +467,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </div>
                       </button>
                     )}
+                  </div>
+
+                  {/* 앱 버전 정보 */}
+                  <div className="mt-2.5 pt-2.5 border-t border-stone-800 flex items-center justify-between px-1.5 text-[11px] text-stone-400">
+                    <span>앱 버전</span>
+                    <span className="font-mono font-semibold text-stone-300">{__APP_VERSION__}</span>
                   </div>
                 </div>
               )}
@@ -579,95 +544,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
       </div>
-
-      {/* PWA Home Screen Installation Guide Modal */}
-      {showPWAInstallGuide && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-950/70 backdrop-blur-xs animate-in fade-in duration-200"
-          onClick={() => setShowPWAInstallGuide(false)}
-        >
-          <div 
-            className="relative w-full max-w-sm bg-stone-900 text-stone-100 rounded-2xl shadow-2xl border border-stone-800 p-5 overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between pb-3 border-b border-stone-800 mb-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                  <Smartphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    {isIOS ? 'iPhone / iPad 앱 설치' : '홈 화면에 앱 설치'}
-                  </h3>
-                  <p className="text-[11px] text-stone-400">인터넷 없이도 바로 실행 가능</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPWAInstallGuide(false)}
-                className="p-1.5 text-stone-400 hover:text-white rounded-lg hover:bg-stone-800 transition cursor-pointer"
-                aria-label="닫기"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {isIOS ? (
-              <div className="space-y-3 text-xs text-stone-300">
-                <div className="flex items-start gap-3 p-3 rounded-xl bg-stone-800/60 border border-stone-700/60">
-                  <div className="p-1.5 rounded-lg bg-stone-700 text-sky-400 shrink-0 mt-0.5">
-                    <Share2 className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white mb-0.5">1. Safari 공유 버튼 누르기</p>
-                    <p className="text-stone-400 leading-relaxed">
-                      화면 하단(또는 상단)의 <strong>공유 아이콘(네모 위 화살표)</strong>을 탭합니다.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 p-3 rounded-xl bg-stone-800/60 border border-stone-700/60">
-                  <div className="p-1.5 rounded-lg bg-stone-700 text-amber-400 shrink-0 mt-0.5">
-                    <PlusSquare className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white mb-0.5">2. '홈 화면에 추가' 선택</p>
-                    <p className="text-stone-400 leading-relaxed">
-                      메뉴를 아래로 스크롤하여 <strong>'홈 화면에 추가'</strong>를 누르고 우측 상단 <strong>'추가'</strong>를 누릅니다.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-[11px]">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>홈 화면에 앱 아이콘이 생성되어 인터넷 없이도 바로 열립니다!</span>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3 text-xs text-stone-300">
-                <div className="p-3 rounded-xl bg-stone-800/60 border border-stone-700/60 space-y-2">
-                  <p className="font-bold text-white">Chrome / Whale / 삼성인터넷 설치 방법</p>
-                  <p className="text-stone-400 leading-relaxed">
-                    브라우저 우측 상단의 <strong>더보기(점 3개)</strong> 메뉴를 누른 후 <strong>'앱 설치'</strong> 또는 <strong>'홈 화면에 추가'</strong>를 선택해주세요.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-[11px]">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>홈 화면에 아이콘이 추가되면 독립 앱으로 실행됩니다.</span>
-                </div>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setShowPWAInstallGuide(false)}
-              className="mt-4 w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-md transition cursor-pointer"
-            >
-              확인 완료
-            </button>
-          </div>
-        </div>
-      )}
     </header>
   );
 };

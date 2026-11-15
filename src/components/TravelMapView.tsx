@@ -63,6 +63,7 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
   }, [sortedDiaries]);
 
   const [isLocating, setIsLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
   const [totalDistance, setTotalDistance] = useState(0);
   const [showVisitorMarkers, setShowVisitorMarkers] = useState(false);
   const visitorMarkersRef = useRef<L.Marker[]>([]);
@@ -411,8 +412,9 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
 
       map.flyTo([pos.lat, pos.lng], 14, { duration: 1.5 });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Location error';
-      alert(msg);
+      const msg = err instanceof Error ? err.message : '위치를 확인할 수 없습니다.';
+      setLocateError(msg);
+      setTimeout(() => setLocateError(null), 4000);
     } finally {
       setIsLocating(false);
     }
@@ -453,6 +455,12 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
               <span>{t('mapRealtimeLocation')}</span>
             </button>
           </div>
+
+          {locateError && (
+            <div className="px-3 py-1.5 rounded-xl bg-rose-950/90 text-rose-200 border border-rose-700/70 text-[11px] font-semibold shadow-lg">
+              {locateError}
+            </div>
+          )}
 
           {/* Admin Visitor Location Controls */}
           {isAdmin && (

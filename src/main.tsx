@@ -8,7 +8,17 @@ import { AuthProvider } from './context/AuthContext';
 import { registerSW } from 'virtual:pwa-register';
 
 // Register service worker for full offline support
-registerSW({ immediate: true });
+registerSW({
+  immediate: true,
+  onRegisteredSW(_swUrl, registration) {
+    if (registration && typeof navigator !== 'undefined' && navigator.onLine) {
+      registration.update().catch(() => {});
+    }
+  },
+  onRegisterError(error) {
+    console.warn('[PWA] Service worker registration error:', error);
+  },
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

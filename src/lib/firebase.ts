@@ -6,8 +6,6 @@ import {
   memoryLocalCache,
   doc, 
   getDocFromServer,
-  collection,
-  getDocs
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -52,6 +50,27 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export function isFirestoreQuotaExceededError(error: unknown): boolean {
+  const code = (error as { code?: string })?.code;
+  const msg = error instanceof Error ? error.message : String(error || '');
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('Quota limit exceeded')
+  );
+}
+
+export function isFirestoreOfflineError(error: unknown): boolean {
+  const code = (error as { code?: string })?.code;
+  const msg = error instanceof Error ? error.message : String(error || '');
+  return (
+    code === 'unavailable' ||
+    msg.includes('the client is offline') ||
+    msg.includes('Failed to get document because the client is offline')
+  );
+}
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
@@ -73,20 +92,30 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test connection on boot (with timeout so stalled connections fail fast)
+// Lightweight connection test on demand (single document ping, never scans full collection)
 export async function testFirestoreConnection(timeoutMs = 8000): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return false;
+  }
   try {
     await Promise.race([
-      getDocs(collection(db, 'diaries')),
+      getDocFromServer(doc(db, 'test', 'connection')),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Firestore connection check timeout')), timeoutMs)
       ),
     ]);
     return true;
   } catch (error: any) {
-    const code = error?.code;
-    if (code === 'permission-denied' || code === 'not-found' || (error instanceof Error && (error.message.includes('permission') || error.message.includes('not-found') || error.message.includes('offline')) === false)) {
+    // Quota exceeded or permission/not-found means the Firestore server IS reachable and online
+    if (
+      isFirestoreQuotaExceededError(error) ||
+      error?.code === 'permission-denied' ||
+      error?.code === 'not-found'
+    ) {
       return true;
+    }
+    if (isFirestoreOfflineError(error)) {
+      return typeof navigator !== 'undefined' ? navigator.onLine : false;
     }
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       return true;
@@ -95,5 +124,3 @@ export async function testFirestoreConnection(timeoutMs = 8000): Promise<boolean
   }
 }
 
-// Execute test on load
-testFirestoreConnection();

@@ -35,12 +35,13 @@ import {
 } from './utils/localDb';
 import {
   ServerDiaryMeta,
+  getCachedServerMetaMap,
   getDiaryServerStatus,
-  subscribeServerDiaryStatus,
+  saveCachedServerMetaMap,
   syncMissingAndUpdatedFromServer,
   upsertDiaryToFirestore,
 } from './services/diaryFirestore';
-import { testFirestoreConnection } from './lib/firebase';
+import { isFirestoreQuotaExceededError } from './lib/firebase';
 import { 
   Compass, 
   CheckCircle2,
@@ -58,8 +59,9 @@ export default function App() {
   const [visitorLogs, setVisitorLogs] = useState<VisitorLog[]>([]);
   const [isVisitorModalOpen, setIsVisitorModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
-  const [serverMetaMap, setServerMetaMap] = useState<Record<string, ServerDiaryMeta>>({});
-  const [hasLoadedServerMeta, setHasLoadedServerMeta] = useState(false);
+  const [initialServerMeta] = useState(() => getCachedServerMetaMap());
+  const [serverMetaMap, setServerMetaMap] = useState<Record<string, ServerDiaryMeta>>(initialServerMeta.metaMap);
+  const [hasLoadedServerMeta, setHasLoadedServerMeta] = useState(initialServerMeta.hasLoaded);
   const [isServerOnline, setIsServerOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -110,13 +112,26 @@ export default function App() {
         }
       }
 
-      // Sync missing or server-updated diaries from Firestore into local IndexedDB
-      if (!isMounted || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      // Sync missing or server-updated diaries from Firestore into local IndexedDB (single boot read)
+      if (!isMounted || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        if (isMounted) setIsServerOnline(false);
+        return;
+      }
       try {
         const syncRes = await syncMissingAndUpdatedFromServer(currentLocal);
         if (!isMounted) return;
         setIsServerOnline(syncRes.online);
-        if (syncRes.online) {
+        if (syncRes.quotaExceeded) {
+          if (Object.keys(syncRes.serverMetaMap).length > 0) {
+            setServerMetaMap(syncRes.serverMetaMap);
+            setHasLoadedServerMeta(true);
+          }
+          setToastMessage({
+            text: '서버(Firestore) 일일 무료 읽기 할당량이 초과되어 기존 캐시로 표시됩니다. (내일 초기화)',
+            type: 'error',
+          });
+          setTimeout(() => setToastMessage(null), 5000);
+        } else if (syncRes.online && !syncRes.errorMessage) {
           setServerMetaMap(syncRes.serverMetaMap);
           setHasLoadedServerMeta(true);
           if (syncRes.addedCount > 0 || syncRes.updatedCount > 0) {
@@ -159,9 +174,19 @@ export default function App() {
     setIsCheckingServer(true);
     try {
       const currentLocal = await getAllLocalDiaries();
-      const syncRes = await syncMissingAndUpdatedFromServer(currentLocal);
+      const syncRes = await syncMissingAndUpdatedFromServer(currentLocal, { force: true });
       setIsServerOnline(syncRes.online);
-      if (syncRes.online) {
+      if (syncRes.quotaExceeded) {
+        if (Object.keys(syncRes.serverMetaMap).length > 0) {
+          setServerMetaMap(syncRes.serverMetaMap);
+          setHasLoadedServerMeta(true);
+        }
+        setToastMessage({
+          text: 'Firebase 일일 무료 읽기 할당량이 초과되어 서버 목록을 조회할 수 없습니다. (내일 초기화됨)',
+          type: 'error',
+        });
+        setTimeout(() => setToastMessage(null), 5000);
+      } else if (syncRes.online && !syncRes.errorMessage) {
         setServerMetaMap(syncRes.serverMetaMap);
         setHasLoadedServerMeta(true);
         if (syncRes.addedCount > 0 || syncRes.updatedCount > 0) {
@@ -176,10 +201,22 @@ export default function App() {
             type: 'success',
           });
           setTimeout(() => setToastMessage(null), 3000);
+        } else {
+          setToastMessage({
+            text: `서버 연결 정상 · 총 ${Object.keys(syncRes.serverMetaMap).length}개 동기화됨`,
+            type: 'success',
+          });
+          setTimeout(() => setToastMessage(null), 2500);
         }
+      } else if (syncRes.errorMessage) {
+        setToastMessage({
+          text: `서버 동기화 지연: ${syncRes.errorMessage}`,
+          type: 'error',
+        });
+        setTimeout(() => setToastMessage(null), 4000);
       }
     } catch {
-      setIsServerOnline(false);
+      setIsServerOnline(typeof navigator !== 'undefined' ? navigator.onLine : false);
     } finally {
       setIsCheckingServer(false);
     }
@@ -188,13 +225,10 @@ export default function App() {
   useEffect(() => {
     let active = true;
 
-    const handleOnline = async () => {
+    const handleOnline = () => {
       if (!active) return;
-      const connected = await testFirestoreConnection();
-      if (active) setIsServerOnline(connected);
-      if (connected) {
-        refreshServerStatus();
-      }
+      setIsServerOnline(true);
+      refreshServerStatus();
     };
 
     const handleOffline = () => {
@@ -204,27 +238,10 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    const unsubscribe = subscribeServerDiaryStatus(
-      (metaMap, fromCache) => {
-        if (!active) return;
-        setServerMetaMap(metaMap);
-        setHasLoadedServerMeta(true);
-        if (!fromCache && (typeof navigator === 'undefined' || navigator.onLine)) {
-          setIsServerOnline(true);
-        }
-      },
-      () => {
-        if (active && typeof navigator !== 'undefined' && !navigator.onLine) {
-          setIsServerOnline(false);
-        }
-      }
-    );
-
     return () => {
       active = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      unsubscribe();
     };
   }, []);
 
@@ -264,10 +281,10 @@ export default function App() {
     saveDiaries(diaries);
   }, [diaries]);
 
-  const handleSaveDiary = async (entry: DiaryEntry) => {
+  const handleSaveDiary = async (entry: DiaryEntry): Promise<boolean> => {
     if (!isAdmin) {
       openLoginModal('관리자 로그인이 필요합니다.');
-      return;
+      return false;
     }
     const existingMatch = diaries.find((d) => isDiaryDuplicate(d, entry));
     const targetEntry: DiaryEntry = { ...entry };
@@ -302,6 +319,7 @@ export default function App() {
       await saveLocalDiary(targetEntry);
       setToastMessage({ text: '일기가 로컬 저장소에 저장되었습니다.', type: 'success' });
       setTimeout(() => setToastMessage(null), 2500);
+      return true;
     } catch (err: any) {
       console.error('Failed to save to local database:', err);
       setToastMessage({ 
@@ -309,6 +327,7 @@ export default function App() {
         type: 'error' 
       });
       setTimeout(() => setToastMessage(null), 5000);
+      return false;
     }
   };
 
@@ -376,14 +395,25 @@ export default function App() {
     }
 
     const originalId = diary.id;
-    const isExistingOnServer = Boolean(serverMetaMap[originalId]);
+    const existingMeta = serverMetaMap[originalId];
+    const isExistingOnServer = Boolean(existingMeta);
 
     setUploadingDiaryIds((prev) => ({ ...prev, [originalId]: true }));
     try {
-      const { updatedDiary, meta } = await upsertDiaryToFirestore(diary, { isExistingOnServer });
+      const { updatedDiary, meta } = await upsertDiaryToFirestore(diary, {
+        isExistingOnServer,
+        existingHasSubcollectionPhotos: existingMeta?.hasSubcollectionPhotos,
+      });
 
-      if (updatedDiary.id !== originalId) {
-        await deleteLocalDiary(originalId).catch(() => {});
+      const localEntryChanged =
+        updatedDiary.id !== originalId ||
+        updatedDiary.updatedAt !== diary.updatedAt ||
+        updatedDiary.hasSubcollectionPhotos !== diary.hasSubcollectionPhotos;
+
+      if (localEntryChanged) {
+        if (updatedDiary.id !== originalId) {
+          await deleteLocalDiary(originalId).catch(() => {});
+        }
         await saveLocalDiary(updatedDiary);
         setDiaries((prev) =>
           sortDiariesDescending(prev.map((d) => (d.id === originalId ? updatedDiary : d)))
@@ -393,7 +423,11 @@ export default function App() {
         }
       }
 
-      setServerMetaMap((prev) => ({ ...prev, [meta.id]: meta }));
+      setServerMetaMap((prev) => {
+        const next = { ...prev, [meta.id]: meta };
+        saveCachedServerMetaMap(next);
+        return next;
+      });
       setHasLoadedServerMeta(true);
       setIsServerOnline(true);
 
@@ -413,11 +447,14 @@ export default function App() {
           if (parsed?.error) readableMsg = parsed.error;
         } catch {}
       }
+      if (isFirestoreQuotaExceededError(err) || isFirestoreQuotaExceededError(readableMsg)) {
+        readableMsg = 'Firebase 일일 무료 할당량이 초과되었습니다. 내일 초기화되거나 요금제 업그레이드가 필요합니다.';
+      }
       setToastMessage({
         text: `서버 반영 실패: ${readableMsg}`,
         type: 'error',
       });
-      setTimeout(() => setToastMessage(null), 4500);
+      setTimeout(() => setToastMessage(null), 5000);
     } finally {
       setUploadingDiaryIds((prev) => {
         const next = { ...prev };

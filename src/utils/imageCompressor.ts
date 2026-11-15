@@ -43,19 +43,41 @@ export const calculateFullHdDimensions = calculateTargetDimensions;
 export function loadImage(source: File | string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = (e) => reject(new Error(`Failed to load image: ${e}`));
+    let objectUrl: string | null = null;
+
+    const cleanup = () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    };
+
+    img.onload = () => {
+      cleanup();
+      resolve(img);
+    };
+    img.onerror = (e) => {
+      cleanup();
+      reject(new Error(`Failed to load image: ${e}`));
+    };
 
     if (typeof source === 'string') {
+      if (/^https?:\/\//i.test(source)) {
+        img.crossOrigin = 'anonymous';
+      }
       img.src = source;
     } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        img.src = e.target?.result as string;
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(source);
+      try {
+        objectUrl = URL.createObjectURL(source);
+        img.src = objectUrl;
+      } catch {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          img.src = e.target?.result as string;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(source);
+      }
     }
   });
 }

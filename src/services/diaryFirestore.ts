@@ -1,15 +1,22 @@
 import {
   collection,
   doc,
+  getCountFromServer,
   getDocFromServer,
   getDocs,
-  getDocsFromServer,
-  onSnapshot,
+  query,
   setDoc,
+  where,
   writeBatch,
   deleteDoc,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType, testFirestoreConnection } from '../lib/firebase';
+import {
+  db,
+  handleFirestoreError,
+  isFirestoreOfflineError,
+  isFirestoreQuotaExceededError,
+  OperationType,
+} from '../lib/firebase';
 import { DiaryEntry, TravelPhoto } from '../types';
 import { createThumbnail, getDiaryPayloadSizeBytes } from '../utils/imageCompressor';
 import { saveMultipleLocalDiaries } from '../utils/localDb';
@@ -20,10 +27,67 @@ export interface ServerDiaryMeta {
   id: string;
   updatedAt: number;
   createdAt?: number;
+  hasSubcollectionPhotos?: boolean;
+}
+
+interface ServerSyncState {
+  lastWatermark: number;
+  lastCheckAt: number;
+  lastFullSyncAt: number;
+}
+
+const SERVER_META_CACHE_KEY = 'hills_server_meta_cache_v1';
+const SERVER_SYNC_STATE_KEY = 'hills_server_sync_state_v1';
+const AUTO_SYNC_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between automatic boot scans
+
+export function getCachedServerMetaMap(): {
+  metaMap: Record<string, ServerDiaryMeta>;
+  hasLoaded: boolean;
+} {
+  try {
+    const raw = localStorage.getItem(SERVER_META_CACHE_KEY);
+    if (!raw) return { metaMap: {}, hasLoaded: false };
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        metaMap: parsed as Record<string, ServerDiaryMeta>,
+        hasLoaded: Object.keys(parsed).length > 0,
+      };
+    }
+  } catch {}
+  return { metaMap: {}, hasLoaded: false };
+}
+
+export function saveCachedServerMetaMap(metaMap: Record<string, ServerDiaryMeta>): void {
+  try {
+    localStorage.setItem(SERVER_META_CACHE_KEY, JSON.stringify(metaMap));
+  } catch {}
+}
+
+function getServerSyncState(): ServerSyncState {
+  try {
+    const raw = localStorage.getItem(SERVER_SYNC_STATE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        lastWatermark: Number(parsed?.lastWatermark) || 0,
+        lastCheckAt: Number(parsed?.lastCheckAt) || 0,
+        lastFullSyncAt: Number(parsed?.lastFullSyncAt) || 0,
+      };
+    }
+  } catch {}
+  return { lastWatermark: 0, lastCheckAt: 0, lastFullSyncAt: 0 };
+}
+
+function saveServerSyncState(patch: Partial<ServerSyncState>): void {
+  try {
+    const current = getServerSyncState();
+    localStorage.setItem(SERVER_SYNC_STATE_KEY, JSON.stringify({ ...current, ...patch }));
+  } catch {}
 }
 
 const VALID_DOC_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
-const MAX_PARENT_DOC_BYTES = 700_000;
+const MAX_PARENT_DOC_BYTES = 100_000;
 const MAX_PHOTO_DOC_BYTES = 600_000;
 const PHOTO_CHUNK_CHAR_SIZE = 500_000;
 const FIRESTORE_OP_TIMEOUT_MS = 120_000;
@@ -97,44 +161,7 @@ export function getDiaryServerStatus(
   return 'synced';
 }
 
-/**
- * Subscribes to Firestore `diaries` collection metadata ONLY (does not overwrite local IndexedDB).
- * Ignores unconfirmed local pending writes so status icons only show green once confirmed by the server.
- */
-export function subscribeServerDiaryStatus(
-  onUpdate: (metaMap: Record<string, ServerDiaryMeta>, fromCache: boolean) => void,
-  onError?: (err: Error) => void
-): () => void {
-  const diariesRef = collection(db, 'diaries');
-  let lastConfirmedMap: Record<string, ServerDiaryMeta> = {};
 
-  return onSnapshot(
-    diariesRef,
-    { includeMetadataChanges: true },
-    (snapshot) => {
-      const nextMap: Record<string, ServerDiaryMeta> = {};
-      snapshot.forEach((docSnap) => {
-        if (!docSnap.metadata.hasPendingWrites) {
-          const data = docSnap.data();
-          nextMap[docSnap.id] = {
-            id: docSnap.id,
-            updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Number(data.updatedAt) || 0,
-            createdAt: typeof data.createdAt === 'number' ? data.createdAt : Number(data.createdAt) || undefined,
-          };
-        } else if (lastConfirmedMap[docSnap.id]) {
-          // Keep the last server-confirmed state until the pending write is acknowledged by Firestore
-          nextMap[docSnap.id] = lastConfirmedMap[docSnap.id];
-        }
-      });
-      lastConfirmedMap = nextMap;
-      onUpdate(nextMap, snapshot.metadata.fromCache);
-    },
-    (error) => {
-      console.warn('[Firestore] subscribeServerDiaryStatus error:', error);
-      if (onError) onError(error);
-    }
-  );
-}
 
 /**
  * Hydrates subcollection HD photos (including chunked photos) for a diary fetched from Firestore.
@@ -236,49 +263,153 @@ function mapDocDataToDiaryEntry(docId: string, data: Record<string, unknown>, ph
   };
 }
 
-/**
- * Reads diaries from Firestore on app boot (or manual refresh):
- * - If a server diary is missing in local IndexedDB -> adds it to local.
- * - If a server diary has a newer `updatedAt` than local -> updates local.
- * - Never overwrites newer local modifications.
- */
-let isSyncingFromServer = false;
-
-export async function syncMissingAndUpdatedFromServer(localDiaries: DiaryEntry[]): Promise<{
+export interface ServerSyncResult {
   online: boolean;
+  quotaExceeded?: boolean;
+  skipped?: boolean;
+  errorMessage?: string;
   serverMetaMap: Record<string, ServerDiaryMeta>;
   addedCount: number;
   updatedCount: number;
   syncedEntries: DiaryEntry[];
-}> {
-  if (isSyncingFromServer) {
-    return { online: true, serverMetaMap: {}, addedCount: 0, updatedCount: 0, syncedEntries: [] };
+}
+
+/**
+ * Reads diaries from Firestore on app boot (or manual refresh) with minimal read units:
+ * - On automatic boot (`force: false`), skips hitting Firestore if checked within 5 minutes and local cache exists.
+ * - When a watermark exists (`lastWatermark > 0` + cached meta), queries ONLY documents with `updatedAt > lastWatermark`!
+ * - Only performs a full collection scan on initial bootstrap (empty cache/IndexedDB) or when count mismatch indicates server deletion.
+ * - Deduplicates concurrent calls (including React StrictMode double-mounts) via `inFlightSyncPromise` and short memory guard.
+ */
+let inFlightSyncPromise: Promise<ServerSyncResult> | null = null;
+let lastAutoSyncAttemptTs = 0;
+
+export async function syncMissingAndUpdatedFromServer(
+  localDiaries: DiaryEntry[],
+  options?: { force?: boolean }
+): Promise<ServerSyncResult> {
+  const force = Boolean(options?.force);
+
+  if (inFlightSyncPromise) {
+    return inFlightSyncPromise;
   }
-  isSyncingFromServer = true;
-  try {
-    const online = await testFirestoreConnection(8000);
-    if (!online) {
+
+  const cachedMeta = getCachedServerMetaMap().metaMap;
+  const cachedCount = Object.keys(cachedMeta).length;
+  const syncState = getServerSyncState();
+  const now = Date.now();
+
+  // Prevent React StrictMode double-mount or rapid reloads from issuing duplicate reads
+  if (!force && now - lastAutoSyncAttemptTs < 4000) {
+    return {
+      online: typeof navigator === 'undefined' ? true : navigator.onLine,
+      quotaExceeded: false,
+      skipped: true,
+      serverMetaMap: cachedMeta,
+      addedCount: 0,
+      updatedCount: 0,
+      syncedEntries: [],
+    };
+  }
+
+  if (
+    !force &&
+    localDiaries.length > 0 &&
+    cachedCount > 0 &&
+    syncState.lastCheckAt > 0 &&
+    now - syncState.lastCheckAt < AUTO_SYNC_COOLDOWN_MS
+  ) {
+    return {
+      online: typeof navigator === 'undefined' ? true : navigator.onLine,
+      quotaExceeded: false,
+      skipped: true,
+      serverMetaMap: cachedMeta,
+      addedCount: 0,
+      updatedCount: 0,
+      syncedEntries: [],
+    };
+  }
+
+  if (!force) {
+    lastAutoSyncAttemptTs = now;
+  }
+
+  inFlightSyncPromise = (async () => {
+    const browserOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+    if (!browserOnline) {
       return {
         online: false,
-        serverMetaMap: {},
+        quotaExceeded: false,
+        serverMetaMap: cachedMeta,
         addedCount: 0,
         updatedCount: 0,
         syncedEntries: [],
       };
     }
 
+    const diariesCol = collection(db, 'diaries');
+    const derivedWatermark =
+      syncState.lastWatermark > 0
+        ? syncState.lastWatermark
+        : cachedCount > 0
+          ? Math.max(...Object.values(cachedMeta).map((m) => Number(m.updatedAt) || 0), 0)
+          : 0;
+
+    // Use incremental query whenever we already have a synced baseline
+    let useIncremental = derivedWatermark > 0 && cachedCount > 0 && localDiaries.length > 0;
+
+    // On manual refresh, verify total server count via lightweight aggregation (1 read unit)
+    // to detect whether a diary was deleted from another device.
+    if (force && useIncremental) {
+      try {
+        const countSnap = await withTimeout(
+          getCountFromServer(diariesCol),
+          10_000,
+          '서버 일기 개수 확인 시간 초과'
+        );
+        const serverCount = countSnap.data().count;
+        if (serverCount < cachedCount) {
+          useIncremental = false;
+        }
+      } catch (countErr) {
+        if (isFirestoreQuotaExceededError(countErr)) {
+          saveServerSyncState({ lastCheckAt: Date.now() });
+          return {
+            online: browserOnline,
+            quotaExceeded: true,
+            errorMessage: countErr instanceof Error ? countErr.message : String(countErr),
+            serverMetaMap: cachedMeta,
+            addedCount: 0,
+            updatedCount: 0,
+            syncedEntries: [],
+          };
+        }
+      }
+    }
+
     let snap;
     try {
+      const targetQuery = useIncremental
+        ? query(diariesCol, where('updatedAt', '>', derivedWatermark))
+        : diariesCol;
+
       snap = await withTimeout(
-        getDocs(collection(db, 'diaries')),
-        18_000,
+        getDocs(targetQuery),
+        25_000,
         '서버 일기 목록 조회 시간 초과'
       );
     } catch (error) {
       console.warn('[Firestore] syncMissingAndUpdatedFromServer failed:', error);
+      const quotaExceeded = isFirestoreQuotaExceededError(error);
+      const offline = !browserOnline || (!quotaExceeded && isFirestoreOfflineError(error));
+      if (quotaExceeded) {
+        saveServerSyncState({ lastCheckAt: Date.now() });
+      }
       return {
-        online: false,
-        serverMetaMap: {},
+        online: !offline,
+        quotaExceeded,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        serverMetaMap: cachedMeta,
         addedCount: 0,
         updatedCount: 0,
         syncedEntries: [],
@@ -290,20 +421,25 @@ export async function syncMissingAndUpdatedFromServer(localDiaries: DiaryEntry[]
       if (item?.id) localMap.set(item.id, item);
     }
 
-    const serverMetaMap: Record<string, ServerDiaryMeta> = {};
+    const serverMetaMap: Record<string, ServerDiaryMeta> = useIncremental ? { ...cachedMeta } : {};
     const entriesToSave: DiaryEntry[] = [];
     let addedCount = 0;
     let updatedCount = 0;
+    let maxSeenUpdatedAt = derivedWatermark;
 
     for (const docSnap of snap.docs) {
       const data = docSnap.data() as Record<string, unknown>;
       const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : Number(data.updatedAt) || 0;
       const serverCreatedAt = typeof data.createdAt === 'number' ? data.createdAt : Number(data.createdAt) || undefined;
+      if (serverUpdatedAt > maxSeenUpdatedAt) {
+        maxSeenUpdatedAt = serverUpdatedAt;
+      }
 
       serverMetaMap[docSnap.id] = {
         id: docSnap.id,
         updatedAt: serverUpdatedAt,
         createdAt: serverCreatedAt,
+        hasSubcollectionPhotos: Boolean(data.hasSubcollectionPhotos),
       };
 
       const localEntry = localMap.get(docSnap.id);
@@ -333,50 +469,60 @@ export async function syncMissingAndUpdatedFromServer(localDiaries: DiaryEntry[]
       await saveMultipleLocalDiaries(entriesToSave, true);
     }
 
+    saveCachedServerMetaMap(serverMetaMap);
+    saveServerSyncState({
+      lastWatermark: maxSeenUpdatedAt > 0 ? maxSeenUpdatedAt : Date.now(),
+      lastCheckAt: Date.now(),
+      ...(useIncremental ? {} : { lastFullSyncAt: Date.now() }),
+    });
+
     return {
       online: true,
+      quotaExceeded: false,
       serverMetaMap,
       addedCount,
       updatedCount,
       syncedEntries: entriesToSave,
     };
-  } finally {
-    isSyncingFromServer = false;
-  }
+  })().finally(() => {
+    inFlightSyncPromise = null;
+  });
+
+  return inFlightSyncPromise;
 }
 
 /**
- * Explicitly checks server connectivity and fetches the latest server diary metadata map.
+ * Checks server diary count via lightweight aggregation query (1 read unit).
  */
 export async function fetchServerDiaryCountAndStatus(): Promise<{
   metaMap: Record<string, ServerDiaryMeta>;
   count: number;
   online: boolean;
+  quotaExceeded?: boolean;
 }> {
-  const online = await testFirestoreConnection(8000);
-  if (!online) {
-    return { metaMap: {}, count: 0, online: false };
+  const cachedMeta = getCachedServerMetaMap().metaMap;
+  const browserOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+  if (!browserOnline) {
+    return { metaMap: cachedMeta, count: Object.keys(cachedMeta).length, online: false, quotaExceeded: false };
   }
 
   try {
-    const snap = await withTimeout(
-      getDocs(collection(db, 'diaries')),
+    const countSnap = await withTimeout(
+      getCountFromServer(collection(db, 'diaries')),
       15_000,
       '서버 일기 수량 조회 시간 초과'
     );
-    const metaMap: Record<string, ServerDiaryMeta> = {};
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      metaMap[docSnap.id] = {
-        id: docSnap.id,
-        updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Number(data.updatedAt) || 0,
-        createdAt: typeof data.createdAt === 'number' ? data.createdAt : Number(data.createdAt) || undefined,
-      };
-    });
-    return { metaMap, count: snap.size, online: true };
+    return { metaMap: cachedMeta, count: countSnap.data().count, online: true, quotaExceeded: false };
   } catch (err) {
     console.warn('[Firestore] fetchServerDiaryCountAndStatus fallback:', err);
-    return { metaMap: {}, count: 0, online: false };
+    const quotaExceeded = isFirestoreQuotaExceededError(err);
+    const offline = !browserOnline || (!quotaExceeded && isFirestoreOfflineError(err));
+    return {
+      metaMap: cachedMeta,
+      count: Object.keys(cachedMeta).length,
+      online: !offline,
+      quotaExceeded,
+    };
   }
 }
 
@@ -413,12 +559,16 @@ function buildValidatedDiaryPayload(
   totalPhotosCount: number,
   syncTimestamp: number
 ): Record<string, unknown> {
+  const parsedLat = Number(entry.location?.lat);
+  const parsedLng = Number(entry.location?.lng);
   const safeLocation = {
-    lat: typeof entry.location?.lat === 'number' && !isNaN(entry.location.lat) ? entry.location.lat : 0,
-    lng: typeof entry.location?.lng === 'number' && !isNaN(entry.location.lng) ? entry.location.lng : 0,
+    lat: Number.isFinite(parsedLat) ? parsedLat : 0,
+    lng: Number.isFinite(parsedLng) ? parsedLng : 0,
     address: String(entry.location?.address || '').slice(0, 500),
     region: String(entry.location?.region || '알 수 없음').slice(0, 200),
-    ...(entry.location?.accuracy !== undefined ? { accuracy: Number(entry.location.accuracy) } : {}),
+    ...(entry.location?.accuracy !== undefined && Number.isFinite(Number(entry.location.accuracy))
+      ? { accuracy: Number(entry.location.accuracy) }
+      : {}),
     ...(entry.location?.landmark ? { landmark: String(entry.location.landmark).slice(0, 200) } : {}),
     ...(entry.location?.isRealtimeGps !== undefined ? { isRealtimeGps: Boolean(entry.location.isRealtimeGps) } : {}),
     ...(entry.location?.includeInDistance !== undefined
@@ -443,7 +593,7 @@ function buildValidatedDiaryPayload(
       ...(entry.localInsights?.soloTravelTip ? { soloTravelTip: String(entry.localInsights.soloTravelTip) } : {}),
     },
     rating: Math.min(5, Math.max(0, Number(entry.rating ?? 5) || 0)),
-    views: Math.max(0, Number(entry.views || 0)),
+    views: Math.max(0, Number(entry.views || 0) || 0),
     hasSubcollectionPhotos,
     totalPhotosCount,
     includeInDistance: entry.includeInDistance !== undefined ? Boolean(entry.includeInDistance) : true,
@@ -463,11 +613,10 @@ function buildValidatedDiaryPayload(
  */
 export async function upsertDiaryToFirestore(
   entry: DiaryEntry,
-  options?: { isExistingOnServer?: boolean }
+  options?: { isExistingOnServer?: boolean; existingHasSubcollectionPhotos?: boolean }
 ): Promise<{ updatedDiary: DiaryEntry; meta: ServerDiaryMeta }> {
-  const isReachable = await testFirestoreConnection(8000);
-  if (!isReachable) {
-    throw new Error('서버(Firestore)에 연결할 수 없습니다. 인터넷 연결 및 Firebase 설정을 확인해주세요.');
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    throw new Error('오프라인 상태에서는 서버에 반영할 수 없습니다. 인터넷 연결을 확인해주세요.');
   }
 
   const validId = ensureValidFirestoreDiaryId(entry.id);
@@ -503,6 +652,10 @@ export async function upsertDiaryToFirestore(
   const inlineBytes = getDiaryPayloadSizeBytes(inlineCandidate);
 
   const diaryDocRef = doc(db, 'diaries', validId);
+  const shouldClearExistingSubPhotos = Boolean(
+    options?.isExistingOnServer && (options?.existingHasSubcollectionPhotos || entry.hasSubcollectionPhotos)
+  );
+  let storedInSubcollection = false;
 
   if (inlineBytes <= MAX_PARENT_DOC_BYTES) {
     try {
@@ -511,18 +664,21 @@ export async function upsertDiaryToFirestore(
         FIRESTORE_OP_TIMEOUT_MS,
         '일기 서버 저장 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.'
       );
-      if (options?.isExistingOnServer) {
+      if (shouldClearExistingSubPhotos) {
         await clearSubcollectionPhotos(validId).catch(() => {});
       }
     } catch (error) {
-      // If setDoc timed out waiting for ACK, verify whether the server actually persisted it
+      // Only perform a read verification if setDoc timed out waiting for ACK
       let confirmedOnServer = false;
-      try {
-        const serverSnap = await withTimeout(getDocFromServer(diaryDocRef), 6000, '확인 시간 초과');
-        if (serverSnap.exists() && (Number(serverSnap.data()?.updatedAt) || 0) >= syncTimestamp) {
-          confirmedOnServer = true;
-        }
-      } catch {}
+      const isTimeout = error instanceof Error && error.message.includes('시간 초과');
+      if (isTimeout) {
+        try {
+          const serverSnap = await withTimeout(getDocFromServer(diaryDocRef), 6000, '확인 시간 초과');
+          if (serverSnap.exists() && (Number(serverSnap.data()?.updatedAt) || 0) >= syncTimestamp) {
+            confirmedOnServer = true;
+          }
+        } catch {}
+      }
 
       if (!confirmedOnServer) {
         handleFirestoreError(error, OperationType.WRITE, `diaries/${validId}`);
@@ -583,8 +739,9 @@ export async function upsertDiaryToFirestore(
       syncTimestamp
     );
 
+    storedInSubcollection = true;
     try {
-      if (options?.isExistingOnServer) {
+      if (shouldClearExistingSubPhotos) {
         await clearSubcollectionPhotos(validId).catch(() => {});
       }
 
@@ -631,10 +788,10 @@ export async function upsertDiaryToFirestore(
             `사진(${i + 1}) 메타 저장 시간이 초과되었습니다.`
           );
 
-          // Commit chunks in batches of 4 (4 * 500KB)
-          for (let start = 0; start < chunks.length; start += 4) {
+          // Commit chunks in compact batches of 2 (2 * 500KB = 1MB max) for mobile reliability
+          for (let start = 0; start < chunks.length; start += 2) {
             const batch = writeBatch(db);
-            const slice = chunks.slice(start, start + 4);
+            const slice = chunks.slice(start, start + 2);
             slice.forEach((chunkData, offsetIdx) => {
               const cIdx = start + offsetIdx;
               const chunkRef = doc(db, 'diaries', validId, 'photos', photo.id, 'chunks', `chunk_${cIdx}`);
@@ -657,12 +814,15 @@ export async function upsertDiaryToFirestore(
       );
     } catch (error) {
       let confirmedOnServer = false;
-      try {
-        const serverSnap = await withTimeout(getDocFromServer(diaryDocRef), 6000, '확인 시간 초과');
-        if (serverSnap.exists() && (Number(serverSnap.data()?.updatedAt) || 0) >= syncTimestamp) {
-          confirmedOnServer = true;
-        }
-      } catch {}
+      const isTimeout = error instanceof Error && error.message.includes('시간 초과');
+      if (isTimeout) {
+        try {
+          const serverSnap = await withTimeout(getDocFromServer(diaryDocRef), 6000, '확인 시간 초과');
+          if (serverSnap.exists() && (Number(serverSnap.data()?.updatedAt) || 0) >= syncTimestamp) {
+            confirmedOnServer = true;
+          }
+        } catch {}
+      }
 
       if (!confirmedOnServer) {
         handleFirestoreError(error, OperationType.WRITE, `diaries/${validId}`);
@@ -673,6 +833,7 @@ export async function upsertDiaryToFirestore(
   const updatedDiary: DiaryEntry = {
     ...entry,
     id: validId,
+    hasSubcollectionPhotos: storedInSubcollection,
     updatedAt: syncTimestamp,
     createdAt: Number(entry.createdAt) || syncTimestamp,
   };
@@ -683,6 +844,7 @@ export async function upsertDiaryToFirestore(
       id: validId,
       updatedAt: syncTimestamp,
       createdAt: updatedDiary.createdAt,
+      hasSubcollectionPhotos: storedInSubcollection,
     },
   };
 }

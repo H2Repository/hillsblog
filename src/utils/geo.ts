@@ -7,13 +7,8 @@ export interface GpsResult {
   timestamp: number;
 }
 
-export function getCurrentGpsPosition(): Promise<GpsResult> {
+function requestPosition(options: PositionOptions): Promise<GpsResult> {
   return new Promise((resolve, reject) => {
-    if (!('geolocation' in navigator)) {
-      reject(new Error('이 브라우저에서는 위치 서비스를 지원하지 않습니다.'));
-      return;
-    }
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
         resolve({
@@ -23,31 +18,66 @@ export function getCurrentGpsPosition(): Promise<GpsResult> {
           timestamp: position.timestamp,
         });
       },
-      (error) => {
-        let msg = '위치 정보를 가져올 수 없습니다.';
-        switch (error.code) {
-          case error.PERMISSION_DENIED:
-            msg = '위치 정보 접근 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해주세요.';
-            break;
-          case error.POSITION_UNAVAILABLE:
-            msg = '현재 위치 정보를 사용할 수 없습니다.';
-            break;
-          case error.TIMEOUT:
-            msg = '위치 정보 요청 시간이 초과되었습니다.';
-            break;
-        }
-        reject(new Error(msg));
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 30000,
-      }
+      (error) => reject(error),
+      options
     );
   });
 }
 
+export async function getCurrentGpsPosition(): Promise<GpsResult> {
+  if (!('geolocation' in navigator)) {
+    throw new Error('이 브라우저에서는 위치 서비스를 지원하지 않습니다.');
+  }
+
+  try {
+    return await requestPosition({
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 30000,
+    });
+  } catch (err: any) {
+    // On iOS offline / weak signal, retry once with cached/lower-accuracy GPS before failing
+    if (err && err.code !== err.PERMISSION_DENIED) {
+      try {
+        return await requestPosition({
+          enableHighAccuracy: false,
+          timeout: 6000,
+          maximumAge: 300000,
+        });
+      } catch (fallbackErr: any) {
+        err = fallbackErr;
+      }
+    }
+
+    let msg = '위치 정보를 가져올 수 없습니다.';
+    switch (err?.code) {
+      case 1:
+        msg = '위치 정보 접근 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해주세요.';
+        break;
+      case 2:
+        msg = '현재 위치 정보를 사용할 수 없습니다.';
+        break;
+      case 3:
+        msg = '위치 정보 요청 시간이 초과되었습니다.';
+        break;
+    }
+    throw new Error(msg);
+  }
+}
+
 export async function reverseGeocode(lat: number, lng: number): Promise<{ address: string; region: string; landmark?: string }> {
+  const coordFallback = {
+    address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+    region: `Location (${lat.toFixed(2)}, ${lng.toFixed(2)})`,
+  };
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return coordFallback;
+  }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+
   try {
     // Request OpenStreetMap Nominatim without language forcing so it returns authentic native local language
     const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
@@ -55,6 +85,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<{ addres
       headers: {
         'Accept': 'application/json',
       },
+      signal: controller?.signal,
     });
 
     if (!res.ok) {
@@ -100,10 +131,9 @@ export async function reverseGeocode(lat: number, lng: number): Promise<{ addres
     };
   } catch (err) {
     console.warn('Reverse geocoding error:', err);
-    return {
-      address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
-      region: `Location (${lat.toFixed(2)}, ${lng.toFixed(2)})`,
-    };
+    return coordFallback;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 

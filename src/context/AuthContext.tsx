@@ -65,8 +65,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn('Firebase signout error:', e);
     }
-    localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-    localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+    try {
+      localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+    } catch {}
     setCurrentUser(null);
     closeLoginModal();
     if (isAuto) {
@@ -110,7 +112,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (parsed && parsed.isAdmin) {
           setCurrentUser(parsed);
           lastActivityRef.current = Date.now();
-          localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+          try {
+            localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+          } catch {}
           setIsLoading(false);
           return;
         }
@@ -146,9 +150,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setCurrentUser(appUser);
         lastActivityRef.current = Date.now();
-        localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+        try {
+          localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+        } catch {}
       } else {
-        const savedSession = localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+        let savedSession: string | null = null;
+        try {
+          savedSession = localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+        } catch {}
         if (!savedSession) {
           setCurrentUser(null);
         }
@@ -274,13 +283,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         provider: 'admin_credentials',
       };
       setCurrentUser(adminUser);
-      localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(adminUser));
+      try {
+        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(adminUser));
+      } catch {
+        // Free up bloated diary cache if quota was full and retry once
+        try {
+          localStorage.removeItem('hills_blog_diaries_v2');
+          localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(adminUser));
+        } catch {}
+      }
       lastActivityRef.current = Date.now();
-      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+      try {
+        localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+      } catch {}
       closeLoginModal();
       return { success: true };
     } else {
-      return { success: false, error: '관리자 비밀번호가 일치하지 않습니다. (기본 비밀번호: hill1234)' };
+      return { success: false, error: '관리자 비밀번호가 일치하지 않습니다.' };
     }
   };
 

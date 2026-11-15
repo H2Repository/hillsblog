@@ -163,6 +163,32 @@ export function getStoredDiaries(): DiaryEntry[] {
 }
 
 export function saveDiaries(diaries: DiaryEntry[]): void {
+  const hasIdb = typeof indexedDB !== 'undefined';
+  if (hasIdb) {
+    // Full diaries & photos live in IndexedDB. Never let localStorage fill up iPhone's 5MB origin limit
+    // and starve auth session or Firestore sync metadata keys.
+    try {
+      const lightweight = diaries.slice(0, 15).map((d) => ({
+        ...d,
+        photos: (d.photos || []).map((p) => ({
+          ...p,
+          url: p.url && p.url.startsWith('data:image/') && p.url.length > 60_000 ? '' : p.url,
+        })),
+      }));
+      const json = JSON.stringify(lightweight);
+      if (json.length <= 400_000) {
+        localStorage.setItem(STORAGE_KEY, json);
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+    }
+    return;
+  }
+
   const { deduplicated } = deduplicateDiaries(diaries);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(deduplicated));
@@ -280,17 +306,52 @@ export async function exportDiariesWithOptions(
   options: ExportOptions
 ): Promise<{ count: number; success: boolean; fileName: string }> {
   const filtered = filterDiariesForExport(diaries, options);
-  const nowStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const count = filtered.length;
 
-  let fileName = `travel_diaries_전체_${nowStr}(${count}).json`;
-  if (options.mode === 'modified') {
-    fileName = `travel_diaries_수정_${nowStr}(${count}).json`;
-  } else if (options.mode === 'range') {
-    const start = (options.startDate || '').replace(/-/g, '');
-    const end = (options.endDate || '').replace(/-/g, '');
-    fileName = `travel_diaries_${start}_${end}(${count}).json`;
+  const formatYymmdd = (dateStr: string): string => {
+    const digits = dateStr.replace(/[^0-9]/g, '');
+    if (digits.length >= 8) return digits.slice(2, 8);
+    if (digits.length === 6) return digits;
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`;
+  };
+
+  const formatMmdd = (dateStr: string): string => {
+    const digits = dateStr.replace(/[^0-9]/g, '');
+    if (digits.length >= 8) return digits.slice(4, 8);
+    if (digits.length === 6) return digits.slice(2, 6);
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${mm}${dd}`;
+  };
+
+  let startYmd = '';
+  let endYmd = '';
+
+  if (options.mode === 'range' && options.startDate && options.endDate) {
+    startYmd = options.startDate <= options.endDate ? options.startDate : options.endDate;
+    endYmd = options.startDate <= options.endDate ? options.endDate : options.startDate;
+  } else {
+    const validDates = filtered
+      .map((d) => (d.date || '').trim())
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort();
+    if (validDates.length > 0) {
+      startYmd = validDates[0];
+      endYmd = validDates[validDates.length - 1];
+    } else {
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      startYmd = today;
+      endYmd = today;
+    }
   }
+
+  const fileName = `viajes_${formatYymmdd(startYmd)}~${formatMmdd(endYmd)}(${count}).json`;
 
   if (filtered.length === 0) {
     return { count: 0, success: false, fileName };

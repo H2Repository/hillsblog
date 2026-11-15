@@ -38,7 +38,7 @@ import {
 interface DiaryEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (entry: DiaryEntry) => void;
+  onSave: (entry: DiaryEntry) => Promise<boolean | void> | boolean | void;
   initialEntry?: DiaryEntry | null;
 }
 
@@ -139,8 +139,10 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   const [transportTip, setTransportTip] = useState('');
   const [soloTravelTip, setSoloTravelTip] = useState('');
 
-  // Reset notification state
+  // Reset notification & validation/save states
   const [showResetNotice, setShowResetNotice] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Mini Map ref
   const miniMapContainerRef = useRef<HTMLDivElement>(null);
@@ -175,6 +177,8 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
     setTransportTip('');
     setSoloTravelTip('');
     setGpsMessage(null);
+    setFormError(null);
+    setIsSaving(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (cameraInputRef.current) cameraInputRef.current.value = '';
   };
@@ -291,8 +295,18 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         miniMapRef.current.remove();
         miniMapRef.current = null;
       }
+      miniMarkerRef.current = null;
     };
   }, [isOpen]);
+
+  // Keep mini-map view and marker synced whenever coordinates update (e.g., async offline GPS)
+  useEffect(() => {
+    if (!isOpen || !miniMapRef.current || !miniMarkerRef.current) return;
+    if (typeof location.lat === 'number' && !isNaN(location.lat) && typeof location.lng === 'number' && !isNaN(location.lng)) {
+      miniMarkerRef.current.setLatLng([location.lat, location.lng]);
+      miniMapRef.current.setView([location.lat, location.lng], miniMapRef.current.getZoom());
+    }
+  }, [isOpen, location.lat, location.lng]);
 
   const updateLocationFromCoords = async (lat: number, lng: number, isRealtime = false) => {
     setIsGpsLoading(true);
@@ -503,19 +517,22 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
 
   const isOverLimit = currentPayloadBytes > MAX_DIARY_PAYLOAD_BYTES;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setFormError(null);
+
     if (!title.trim()) {
-      alert('일기 제목을 입력해주세요.');
+      setFormError('일기 제목을 입력해주세요.');
       return;
     }
     if (!content.trim()) {
-      alert('여행 일기 내용을 작성해주세요.');
+      setFormError('여행 일기 내용을 작성해주세요.');
       return;
     }
 
     if (isOverLimit) {
-      alert(`일기 작성 전체 용량(${formatBytes(currentPayloadBytes)})이 최대 허용 용량인 10MB를 초과했습니다. 첨부된 사진 수를 줄이거나 조절해주세요.`);
+      setFormError(`일기 작성 전체 용량(${formatBytes(currentPayloadBytes)})이 최대 허용 용량인 10MB를 초과했습니다. 첨부된 사진 수를 줄이거나 조절해주세요.`);
       return;
     }
 
@@ -546,8 +563,19 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
       isModified: Boolean(initialEntry),
     };
 
-    onSave(newDiary);
-    onClose();
+    setIsSaving(true);
+    try {
+      const result = await onSave(newDiary);
+      if (result !== false) {
+        onClose();
+      } else {
+        setFormError('일기 저장 중 오류가 발생했습니다. 다시 시도해주세요.');
+      }
+    } catch {
+      setFormError('일기 저장 중 오류가 발생했습니다. 다시 시도해주세요.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -831,8 +859,12 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                   title="카메라로 실시간 촬영하기"
                 >
                   <input
+                    ref={cameraInputRef}
                     type="file"
-                    onChange={(e) => handlePhotoFiles(e.target.files)}
+                    onChange={(e) => {
+                      handlePhotoFiles(e.target.files);
+                      e.target.value = '';
+                    }}
                     accept="image/*"
                     capture="environment"
                     className="sr-only"
@@ -845,8 +877,12 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium transition shadow-sm cursor-pointer"
                 >
                   <input
+                    ref={fileInputRef}
                     type="file"
-                    onChange={(e) => handlePhotoFiles(e.target.files)}
+                    onChange={(e) => {
+                      handlePhotoFiles(e.target.files);
+                      e.target.value = '';
+                    }}
                     accept="image/*"
                     multiple
                     className="sr-only"
@@ -1195,6 +1231,13 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
             </div>
           </div>
 
+          {formError && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {/* Footer Buttons & 10MB Capacity Meter */}
           <div className="pt-3 sm:pt-4 border-t border-stone-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
@@ -1241,11 +1284,11 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isOverLimit}
+                disabled={isOverLimit || isSaving}
                 className="flex-1 sm:flex-initial px-5 sm:px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold shadow-md shadow-amber-900/30 transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer text-center"
               >
-                <Check className="w-4 h-4 shrink-0" />
-                <span>{initialEntry ? '일기 수정 완료' : '일기 등록'}</span>
+                {isSaving ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Check className="w-4 h-4 shrink-0" />}
+                <span>{isSaving ? '저장 중...' : initialEntry ? '일기 수정 완료' : '일기 등록'}</span>
               </button>
             </div>
           </div>

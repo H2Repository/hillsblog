@@ -380,9 +380,16 @@ export async function translateTextOnline(text: string, targetLang: SupportedLan
     return memoryCache[cacheKey];
   }
 
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return text;
+  }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 5000) : null;
+
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text.trim())}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: controller?.signal });
     if (!res.ok) {
       throw new Error(`Translation failed with status ${res.status}`);
     }
@@ -396,6 +403,8 @@ export async function translateTextOnline(text: string, targetLang: SupportedLan
     }
   } catch (err) {
     console.warn('Online translation error:', err);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
   return text;

@@ -74,9 +74,10 @@ async function saveToStore<T>(storeName: string, item: T): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, 'readwrite');
     const store = transaction.objectStore(storeName);
-    const request = store.put(item);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+    store.put(item);
   });
 }
 
@@ -85,9 +86,10 @@ async function deleteFromStore(storeName: string, id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, 'readwrite');
     const store = transaction.objectStore(storeName);
-    const request = store.delete(id);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+    store.delete(id);
   });
 }
 
@@ -96,9 +98,10 @@ async function clearStore(storeName: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, 'readwrite');
     const store = transaction.objectStore(storeName);
-    const request = store.clear();
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+    store.clear();
   });
 }
 
@@ -127,8 +130,6 @@ export async function getLocalDiaryById(id: string): Promise<DiaryEntry | null> 
 
 export async function saveLocalDiary(entry: DiaryEntry): Promise<void> {
   await saveToStore(STORE_DIARIES, entry);
-  const all = await getAllLocalDiaries();
-  saveDiaries(all);
 }
 
 export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverwrite = false): Promise<void> {
@@ -146,6 +147,7 @@ export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverw
 
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
 
     entries.forEach(entry => {
       if (!forceOverwrite) {
@@ -157,14 +159,10 @@ export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverw
       store.put(entry);
     });
   });
-  const all = await getAllLocalDiaries();
-  saveDiaries(all);
 }
 
 export async function deleteLocalDiary(id: string): Promise<void> {
   await deleteFromStore(STORE_DIARIES, id);
-  const all = await getAllLocalDiaries();
-  saveDiaries(all);
 }
 
 export async function clearLocalDb(): Promise<void> {
