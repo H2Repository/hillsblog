@@ -526,6 +526,34 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         <span>{t('cardViewOnMap')}</span>
                       </button>
 
+                      {/* Admin-only Actions: Edit & Delete */}
+                      {isAdmin && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onEditDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
+                            title={t('cardEdit')}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition text-stone-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                            title={t('cardDelete')}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+
                       {/* Server Status Button */}
                       <button
                         type="button"
@@ -569,34 +597,6 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                                 : '서버됨'}
                         </span>
                       </button>
-
-                      {/* Admin-only Actions: Edit & Delete */}
-                      {isAdmin && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onEditDiary(originalDiary);
-                            }}
-                            className="p-1.5 rounded transition text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-                            title={t('cardEdit')}
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteDiary(originalDiary);
-                            }}
-                            className="p-1.5 rounded transition text-stone-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
-                            title={t('cardDelete')}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
                     </div>
 
                     <button

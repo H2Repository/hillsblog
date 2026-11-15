@@ -242,6 +242,8 @@ function mapDocDataToDiaryEntry(docId: string, data: Record<string, unknown>, ph
  * - If a server diary has a newer `updatedAt` than local -> updates local.
  * - Never overwrites newer local modifications.
  */
+let isSyncingFromServer = false;
+
 export async function syncMissingAndUpdatedFromServer(localDiaries: DiaryEntry[]): Promise<{
   online: boolean;
   serverMetaMap: Record<string, ServerDiaryMeta>;
@@ -249,90 +251,98 @@ export async function syncMissingAndUpdatedFromServer(localDiaries: DiaryEntry[]
   updatedCount: number;
   syncedEntries: DiaryEntry[];
 }> {
-  const online = await testFirestoreConnection(8000);
-  if (!online) {
-    return {
-      online: false,
-      serverMetaMap: {},
-      addedCount: 0,
-      updatedCount: 0,
-      syncedEntries: [],
-    };
+  if (isSyncingFromServer) {
+    return { online: true, serverMetaMap: {}, addedCount: 0, updatedCount: 0, syncedEntries: [] };
   }
-
-  let snap;
+  isSyncingFromServer = true;
   try {
-    snap = await withTimeout(
-      getDocsFromServer(collection(db, 'diaries')),
-      18_000,
-      '서버 일기 목록 조회 시간 초과'
-    );
-  } catch (error) {
-    console.warn('[Firestore] syncMissingAndUpdatedFromServer failed:', error);
-    return {
-      online: false,
-      serverMetaMap: {},
-      addedCount: 0,
-      updatedCount: 0,
-      syncedEntries: [],
-    };
-  }
-
-  const localMap = new Map<string, DiaryEntry>();
-  for (const item of localDiaries) {
-    if (item?.id) localMap.set(item.id, item);
-  }
-
-  const serverMetaMap: Record<string, ServerDiaryMeta> = {};
-  const entriesToSave: DiaryEntry[] = [];
-  let addedCount = 0;
-  let updatedCount = 0;
-
-  for (const docSnap of snap.docs) {
-    const data = docSnap.data() as Record<string, unknown>;
-    const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : Number(data.updatedAt) || 0;
-    const serverCreatedAt = typeof data.createdAt === 'number' ? data.createdAt : Number(data.createdAt) || undefined;
-
-    serverMetaMap[docSnap.id] = {
-      id: docSnap.id,
-      updatedAt: serverUpdatedAt,
-      createdAt: serverCreatedAt,
-    };
-
-    const localEntry = localMap.get(docSnap.id);
-    const localUpdatedAt = localEntry ? Number(localEntry.updatedAt) || 0 : -1;
-
-    const needsAdd = !localEntry;
-    const needsUpdate = Boolean(localEntry && serverUpdatedAt > localUpdatedAt);
-
-    if (needsAdd || needsUpdate) {
-      const parentPhotos = Array.isArray(data.photos) ? (data.photos as TravelPhoto[]) : [];
-      const fullPhotos = data.hasSubcollectionPhotos
-        ? await hydrateSubcollectionPhotos(docSnap.id, parentPhotos)
-        : parentPhotos;
-
-      const mapped = mapDocDataToDiaryEntry(docSnap.id, data, fullPhotos);
-      if (localEntry) {
-        mapped.views = Math.max(localEntry.views || 0, mapped.views || 0);
-        updatedCount++;
-      } else {
-        addedCount++;
-      }
-      entriesToSave.push(mapped);
+    const online = await testFirestoreConnection(8000);
+    if (!online) {
+      return {
+        online: false,
+        serverMetaMap: {},
+        addedCount: 0,
+        updatedCount: 0,
+        syncedEntries: [],
+      };
     }
-  }
 
-  if (entriesToSave.length > 0) {
-    await saveMultipleLocalDiaries(entriesToSave, true);
-  }
+    let snap;
+    try {
+      snap = await withTimeout(
+        getDocs(collection(db, 'diaries')),
+        18_000,
+        '서버 일기 목록 조회 시간 초과'
+      );
+    } catch (error) {
+      console.warn('[Firestore] syncMissingAndUpdatedFromServer failed:', error);
+      return {
+        online: false,
+        serverMetaMap: {},
+        addedCount: 0,
+        updatedCount: 0,
+        syncedEntries: [],
+      };
+    }
 
-  return {
-    online: true,
-    serverMetaMap,
-    addedCount,
-    updatedCount,
-    syncedEntries: entriesToSave,
-  };
+    const localMap = new Map<string, DiaryEntry>();
+    for (const item of localDiaries) {
+      if (item?.id) localMap.set(item.id, item);
+    }
+
+    const serverMetaMap: Record<string, ServerDiaryMeta> = {};
+    const entriesToSave: DiaryEntry[] = [];
+    let addedCount = 0;
+    let updatedCount = 0;
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data() as Record<string, unknown>;
+      const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : Number(data.updatedAt) || 0;
+      const serverCreatedAt = typeof data.createdAt === 'number' ? data.createdAt : Number(data.createdAt) || undefined;
+
+      serverMetaMap[docSnap.id] = {
+        id: docSnap.id,
+        updatedAt: serverUpdatedAt,
+        createdAt: serverCreatedAt,
+      };
+
+      const localEntry = localMap.get(docSnap.id);
+      const localUpdatedAt = localEntry ? Number(localEntry.updatedAt) || 0 : -1;
+
+      const needsAdd = !localEntry;
+      const needsUpdate = Boolean(localEntry && serverUpdatedAt > localUpdatedAt);
+
+      if (needsAdd || needsUpdate) {
+        const parentPhotos = Array.isArray(data.photos) ? (data.photos as TravelPhoto[]) : [];
+        const fullPhotos = data.hasSubcollectionPhotos
+          ? await hydrateSubcollectionPhotos(docSnap.id, parentPhotos)
+          : parentPhotos;
+
+        const mapped = mapDocDataToDiaryEntry(docSnap.id, data, fullPhotos);
+        if (localEntry) {
+          mapped.views = Math.max(localEntry.views || 0, mapped.views || 0);
+          updatedCount++;
+        } else {
+          addedCount++;
+        }
+        entriesToSave.push(mapped);
+      }
+    }
+
+    if (entriesToSave.length > 0) {
+      await saveMultipleLocalDiaries(entriesToSave, true);
+    }
+
+    return {
+      online: true,
+      serverMetaMap,
+      addedCount,
+      updatedCount,
+      syncedEntries: entriesToSave,
+    };
+  } finally {
+    isSyncingFromServer = false;
+  }
 }
 
 /**
@@ -350,7 +360,7 @@ export async function fetchServerDiaryCountAndStatus(): Promise<{
 
   try {
     const snap = await withTimeout(
-      getDocsFromServer(collection(db, 'diaries')),
+      getDocs(collection(db, 'diaries')),
       15_000,
       '서버 일기 수량 조회 시간 초과'
     );

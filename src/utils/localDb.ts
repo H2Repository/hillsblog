@@ -1,5 +1,5 @@
 import { DiaryEntry } from '../types';
-import { sortDiariesDescending } from './storage';
+import { sortDiariesDescending, saveDiaries } from './storage';
 
 // Database configuration
 const DB_NAME = 'hills_travel_storage_v5';
@@ -127,6 +127,8 @@ export async function getLocalDiaryById(id: string): Promise<DiaryEntry | null> 
 
 export async function saveLocalDiary(entry: DiaryEntry): Promise<void> {
   await saveToStore(STORE_DIARIES, entry);
+  const all = await getAllLocalDiaries();
+  saveDiaries(all);
 }
 
 export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverwrite = false): Promise<void> {
@@ -138,7 +140,7 @@ export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverw
   }
 
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(STORE_DIARIES, 'readwrite');
     const store = transaction.objectStore(STORE_DIARIES);
 
@@ -155,12 +157,17 @@ export async function saveMultipleLocalDiaries(entries: DiaryEntry[], forceOverw
       store.put(entry);
     });
   });
+  const all = await getAllLocalDiaries();
+  saveDiaries(all);
 }
 
 export async function deleteLocalDiary(id: string): Promise<void> {
   await deleteFromStore(STORE_DIARIES, id);
+  const all = await getAllLocalDiaries();
+  saveDiaries(all);
 }
 
 export async function clearLocalDb(): Promise<void> {
   await clearStore(STORE_DIARIES);
+  saveDiaries([]);
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { DiaryEntry, GeoLocation, TravelPhoto, WeatherType } from '../types';
-import { getCurrentGpsPosition, reverseGeocode, POPULAR_SOLO_DESTINATIONS } from '../utils/geo';
+import { getCurrentGpsPosition, reverseGeocode, POPULAR_SOLO_DESTINATIONS, getLocalDateString } from '../utils/geo';
 import { 
   compressPhotoToHd, 
   MAX_DIARY_PAYLOAD_BYTES, 
@@ -81,7 +81,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   initialEntry,
 }) => {
   const getTodayDateString = () => {
-    return new Date().toISOString().slice(0, 10);
+    return getLocalDateString();
   };
 
   // Form State
@@ -675,7 +675,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
               <div className="lg:col-span-7 space-y-2.5">
                 <div>
                   <label className="block text-xs font-medium text-stone-700 mb-1">
-                    지역 명칭 (현지 언어 표기)
+                    지역 명칭
                   </label>
                   <input
                     type="text"
@@ -688,7 +688,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-stone-700 mb-1">
-                    상세 주소 (현지 언어 도로명 / 상세 위치)
+                    상세 주소
                   </label>
                   <input
                     type="text"
@@ -702,7 +702,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                 <div className="flex gap-2">
                   <div className="flex-1 min-w-0">
                     <label className="block text-xs font-medium text-stone-700 mb-1">
-                      구체적 여행 포인트 / 명소 (현지 언어)
+                      구체적 여행 포인트 / 명소
                     </label>
                     <input
                       type="text"

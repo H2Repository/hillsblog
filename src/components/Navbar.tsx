@@ -119,13 +119,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-stone-900/95 text-stone-100 backdrop-blur-md border-b border-stone-800 shadow-md">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <header className="fixed top-0 left-0 right-0 z-50 bg-stone-900/95 text-stone-100 backdrop-blur-md border-b border-stone-800 shadow-md">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
         {/* Top Bar: Logo, Language, Actions */}
-        <div className="flex items-center justify-between h-18">
+        <div className="flex items-center justify-between h-16 sm:h-18 gap-1.5">
           {/* Logo & Blog Identity */}
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl overflow-hidden shadow-lg shrink-0 border flex items-center justify-center relative transition-all ${
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden shadow-lg shrink-0 border flex items-center justify-center relative transition-all ${
               isOffline ? 'border-rose-500 ring-2 ring-rose-500/60 shadow-rose-950/50' : 'border-amber-500/30 shadow-amber-900/30'
             }`}>
               <img 
@@ -139,9 +139,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
+                <h1 className="text-base sm:text-xl font-bold tracking-tight text-white flex items-center gap-1.5 truncate">
                   {t('appTitle')}
                 </h1>
               </div>
@@ -152,12 +152,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Online Icon + Server Diary Count & Language Selector */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button
               id="btn-server-status-count"
               type="button"
               onClick={onRefreshServerStatus}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer ${
                 isServerOnline
                   ? 'bg-emerald-950/60 hover:bg-emerald-900/70 border-emerald-500/40 text-emerald-300'
                   : 'bg-rose-950/70 hover:bg-rose-900/70 border-rose-500/50 text-rose-300'
@@ -197,7 +197,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Action Buttons: New Diary & Hamburger Menu */}
-          <div className="flex items-center gap-2 sm:gap-2.5">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             {/* New Diary Write Button */}
             <button
               id="btn-new-diary-modal"
@@ -209,7 +209,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   openLoginModal('새 일기 작성은 관리자만 가능합니다. 로그인해주세요.');
                 }
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-md active:scale-95 transition-all duration-150 cursor-pointer ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold shadow-md active:scale-95 transition-all duration-150 cursor-pointer ${
                 isOffline
                   ? 'bg-rose-700 hover:bg-rose-600 text-white shadow-rose-950/50 ring-1 ring-rose-500/80'
                   : isAdmin

@@ -159,8 +159,9 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
       mapInstanceRef.current = null;
     }
 
-    const defaultCenter: [number, number] = sortedDiaries.length > 0
-      ? [sortedDiaries[0].location.lat, sortedDiaries[0].location.lng]
+    const latestDiary = sortedDiaries.length > 0 ? sortedDiaries[sortedDiaries.length - 1] : null;
+    const defaultCenter: [number, number] = latestDiary
+      ? [latestDiary.location.lat, latestDiary.location.lng]
       : [34.1205, 133.0076]; // Default touring center
 
     const map = L.map(mapContainerRef.current, {
@@ -336,9 +337,9 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
     }
 
     // Fit bounds only once upon initial map load so viewing or closing diaries NEVER resets user's zoom/pan
-    if (!hasInitialFitRef.current && latLngs.length > 0) {
-      const bounds = L.latLngBounds(latLngs);
-      map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
+    if (!hasInitialFitRef.current && sortedDiaries.length > 0) {
+      const latestDiary = sortedDiaries[sortedDiaries.length - 1];
+      map.setView([latestDiary.location.lat, latestDiary.location.lng], 13);
       hasInitialFitRef.current = true;
     }
   }, [sortedDiaries, onSelectDiary, t, diaries]);

@@ -45,6 +45,7 @@ export const LoginModal: React.FC = () => {
     if (!res.success) {
       setErrorMessage(res.error || '로그인에 실패했습니다.');
     } else {
+      (document.activeElement as HTMLElement | null)?.blur?.();
       setPasscode('');
     }
   };
@@ -66,11 +67,11 @@ export const LoginModal: React.FC = () => {
       onClick={closeLoginModal}
     >
       <div 
-        className="bg-white border border-stone-200 w-[95vw] max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col text-stone-900 my-auto max-h-[90vh]"
+        className="bg-white border border-stone-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col text-stone-900 my-auto max-h-[88dvh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-stone-900 text-stone-100 flex items-start justify-between">
+        <div className="p-3.5 sm:p-5 bg-stone-900 text-stone-100 flex items-start justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
               <ShieldCheck className="w-5 h-5" />
@@ -103,7 +104,7 @@ export const LoginModal: React.FC = () => {
         )}
 
         {/* Body */}
-        <div className="p-5 sm:p-6 space-y-5">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {currentUser ? (
             /* Already logged in view */
             <div className="space-y-4 text-center py-2">
@@ -165,9 +166,9 @@ export const LoginModal: React.FC = () => {
               {activeTab === 'passcode' && (
                 <form onSubmit={handlePasscodeSubmit} className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-[11px] sm:text-xs font-semibold text-stone-700 flex items-center justify-between">
-                      <span>관리자 비밀번호</span>
-                      <span className="text-[10px] text-stone-400 font-normal truncate ml-2">계정: {ADMIN_EMAIL}</span>
+                    <label className="text-[11px] sm:text-xs font-semibold text-stone-700 flex items-center justify-between gap-2">
+                      <span className="shrink-0">관리자 비밀번호</span>
+                      <span className="text-[10px] text-stone-400 font-normal truncate min-w-0">계정: {ADMIN_EMAIL}</span>
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -176,8 +177,8 @@ export const LoginModal: React.FC = () => {
                         value={passcode}
                         onChange={(e) => setPasscode(e.target.value)}
                         placeholder="비밀번호 입력"
-                        className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
-                        autoFocus
+                        autoComplete="current-password"
+                        className="w-full pl-9 pr-3 py-2.5 text-base sm:text-xs rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
                       />
                     </div>
                   </div>

@@ -204,11 +204,6 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Initial server connection check
-    testFirestoreConnection().then((ok) => {
-      if (active) setIsServerOnline(ok && (typeof navigator === 'undefined' ? true : navigator.onLine));
-    });
-
     const unsubscribe = subscribeServerDiaryStatus(
       (metaMap, fromCache) => {
         if (!active) return;
@@ -446,7 +441,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col flex-1 bg-stone-100 text-stone-900 font-sans selection:bg-amber-200 selection:text-amber-900 overflow-x-hidden">
+    <div className="flex flex-col flex-1 bg-stone-100 text-stone-900 font-sans selection:bg-amber-200 selection:text-amber-900 overflow-x-hidden pt-24">
       <Navbar
         viewMode={viewMode}
         onViewModeChange={setViewMode}
