@@ -14,8 +14,7 @@ service cloud.firestore {
         && data.date is string && data.date.size() <= 50
         && data.time is string && data.time.size() <= 50
         && data.location is map
-        && data.rating is number && data.rating >= 0 && data.rating <= 5
-        && (!('views' in data) || (data.views is number && data.views >= 0));
+        && data.rating is number && data.rating >= 0 && data.rating <= 5;
     }
 
     // Connection health check document
@@ -39,11 +38,27 @@ service cloud.firestore {
       }
     }
 
-    // Visitor location logs for administrator analytics
-    match /visitor_logs/{logId} {
-      allow read, delete: if true;
-      allow create: if isValidId(logId) && request.resource.data.id == logId && request.resource.data.timestamp is number;
-      allow update: if false;
+    function isValidAppVersion(data) {
+      return data.keys().hasAll(['lastBuildId', 'deployCount', 'buildTime', 'updatedAt'])
+        && data.keys().hasOnly(['lastBuildId', 'deployCount', 'buildTime', 'updatedAt'])
+        && data.lastBuildId is string && data.lastBuildId.size() > 0 && data.lastBuildId.size() <= 64
+        && data.deployCount is number && data.deployCount >= 1 && data.deployCount <= 1000000
+        && data.buildTime is string && data.buildTime.size() > 0 && data.buildTime.size() <= 32
+        && data.updatedAt is number;
+    }
+
+    // Published build version counter metadata (increments +1 only when buildId changes)
+    match /app_meta/{docId} {
+      allow get: if docId == 'version';
+      allow list: if false;
+      allow create: if docId == 'version'
+        && isValidAppVersion(request.resource.data)
+        && request.resource.data.deployCount == 1;
+      allow update: if docId == 'version'
+        && isValidAppVersion(request.resource.data)
+        && request.resource.data.lastBuildId != resource.data.lastBuildId
+        && request.resource.data.deployCount == resource.data.deployCount + 1;
+      allow delete: if false;
     }
   }
 }

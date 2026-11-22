@@ -3,7 +3,7 @@ import { DiaryEntry, TravelPhoto } from '../types';
 export const MAX_PHOTO_DIMENSION = 2048; // Crisp 2K resolution up to 2048px
 export const MAX_PHOTO_BYTES = 3 * 1024 * 1024; // 3MB limit per photo (3메가 제한)
 export const MAX_HD_PHOTO_BYTES = MAX_PHOTO_BYTES; // Backward compatibility alias
-export const MAX_DIARY_PAYLOAD_BYTES = 10 * 1024 * 1024; // 10MB max diary creation payload (including photos)
+export const MAX_DIARY_PAYLOAD_BYTES = 30 * 1024 * 1024; // 30MB max diary payload (subcollection chunked upload)
 export const DEFAULT_JPEG_QUALITY = 0.88;
 
 /**
@@ -101,62 +101,73 @@ export interface CompressResult {
  */
 export async function compressPhotoToHd(
   source: File | string,
-  quality: number = DEFAULT_JPEG_QUALITY
+  quality: number = DEFAULT_JPEG_QUALITY,
+  maxBytes: number = MAX_PHOTO_BYTES,
+  maxDimension: number = MAX_PHOTO_DIMENSION
 ): Promise<CompressResult> {
   const img = await loadImage(source);
   const origW = img.naturalWidth || img.width;
   const origH = img.naturalHeight || img.height;
 
-  let { width: targetW, height: targetH, wasScaled } = calculateTargetDimensions(origW, origH, MAX_PHOTO_DIMENSION);
+  let { width: targetW, height: targetH, wasScaled } = calculateTargetDimensions(origW, origH, maxDimension);
 
   const canvas = document.createElement('canvas');
-  canvas.width = targetW;
-  canvas.height = targetH;
+  try {
+    canvas.width = targetW;
+    canvas.height = targetH;
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('Canvas 2D context is not available');
-  }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Canvas 2D context is not available');
+    }
 
-  // Smooth high-definition rendering
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, 0, 0, targetW, targetH);
+    // Smooth high-definition rendering
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetW, targetH);
 
-  let currentQuality = quality;
-  let dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
-  let sizeBytes = Math.round((dataUrl.length * 3) / 4);
+    let currentQuality = quality;
+    let dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
+    let sizeBytes = Math.round((dataUrl.length * 3) / 4);
 
-  // If output size exceeds 3MB, iteratively reduce quality or scale down to guarantee <= 3MB
-  let attempts = 0;
-  while (sizeBytes > MAX_PHOTO_BYTES && attempts < 6) {
-    attempts++;
-    currentQuality = Math.max(0.45, currentQuality - 0.1);
-    dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
-    sizeBytes = Math.round((dataUrl.length * 3) / 4);
-
-    if (sizeBytes > MAX_PHOTO_BYTES && attempts >= 2) {
-      targetW = Math.round(targetW * 0.85);
-      targetH = Math.round(targetH * 0.85);
-      canvas.width = targetW;
-      canvas.height = targetH;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, 0, 0, targetW, targetH);
+    // If output size exceeds maxBytes, iteratively reduce quality and scale down to guarantee <= maxBytes
+    let attempts = 0;
+    while (sizeBytes > maxBytes && attempts < 12) {
+      attempts++;
+      currentQuality = Math.max(0.35, currentQuality - 0.08);
       dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
       sizeBytes = Math.round((dataUrl.length * 3) / 4);
-      wasScaled = true;
-    }
-  }
 
-  return {
-    dataUrl,
-    width: targetW,
-    height: targetH,
-    originalWidth: origW,
-    originalHeight: origH,
-    wasScaled,
-    sizeBytes,
-  };
+      if (sizeBytes > maxBytes && attempts >= 2) {
+        targetW = Math.max(320, Math.round(targetW * 0.82));
+        targetH = Math.max(320, Math.round(targetH * 0.82));
+        canvas.width = targetW;
+        canvas.height = targetH;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
+        sizeBytes = Math.round((dataUrl.length * 3) / 4);
+        wasScaled = true;
+      }
+    }
+
+    return {
+      dataUrl,
+      width: targetW,
+      height: targetH,
+      originalWidth: origW,
+      originalHeight: origH,
+      wasScaled,
+      sizeBytes,
+    };
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+    try {
+      img.src = '';
+    } catch {}
+  }
 }
 
 // Backward compatibility aliases
@@ -175,14 +186,16 @@ export async function createThumbnail(
   maxDimension: number = 480,
   quality: number = 0.75
 ): Promise<string> {
+  let canvas: HTMLCanvasElement | null = null;
+  let img: HTMLImageElement | null = null;
   try {
-    const img = await loadImage(source);
+    img = await loadImage(source);
     const origW = img.naturalWidth || img.width;
     const origH = img.naturalHeight || img.height;
 
     const { width: targetW, height: targetH } = calculateTargetDimensions(origW, origH, maxDimension);
 
-    const canvas = document.createElement('canvas');
+    canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
 
@@ -197,6 +210,16 @@ export async function createThumbnail(
   } catch (err) {
     console.warn('createThumbnail failed, fallback to original:', err);
     return typeof source === 'string' ? source : '';
+  } finally {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    if (img) {
+      try {
+        img.src = '';
+      } catch {}
+    }
   }
 }
 

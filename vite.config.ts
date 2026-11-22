@@ -5,26 +5,22 @@ import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-function resolveAppVersion(command: 'build' | 'serve'): string {
+function resolveAppBuildMeta(command: 'build' | 'serve'): {
+  appVersion: string;
+  buildTime: string;
+  buildId: string;
+  isProdBuild: boolean;
+} {
   const metaPath = path.resolve(__dirname, 'build-meta.json');
-  let deployCount = 0;
+  let deployCount = 1;
   try {
     if (fs.existsSync(metaPath)) {
       const raw = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-      if (typeof raw?.deployCount === 'number' && Number.isFinite(raw.deployCount)) {
+      if (typeof raw?.deployCount === 'number' && Number.isFinite(raw.deployCount) && raw.deployCount >= 1) {
         deployCount = raw.deployCount;
       }
     }
   } catch {}
-
-  if (command === 'build') {
-    deployCount += 1;
-    try {
-      fs.writeFileSync(metaPath, JSON.stringify({ deployCount }, null, 2) + '\n', 'utf-8');
-    } catch {}
-  } else if (deployCount < 1) {
-    deployCount = 1;
-  }
 
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -34,22 +30,27 @@ function resolveAppVersion(command: 'build' | 'serve'): string {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
   }).formatToParts(now);
   const get = (t: string) => parts.find((p) => p.type === t)?.value || '00';
   const hh = get('hour') === '24' ? '00' : get('hour');
-  const yymmddhhmm = `${get('year')}${get('month')}${get('day')}${hh}${get('minute')}`;
-  const countStr = String(deployCount).padStart(3, '0');
-  return `v ${yymmddhhmm}(${countStr})`;
+  const buildTime = `${get('year')}${get('month')}${get('day')}${hh}${get('minute')}`;
+  const buildId = `${buildTime}${get('second')}`;
+  const appVersion = `Ver 1.${String(deployCount).padStart(3, '0')}`;
+  return { appVersion, buildTime, buildId, isProdBuild: command === 'build' };
 }
 
 export default defineConfig(({ command }) => {
-  const appVersion = resolveAppVersion(command);
+  const { appVersion, buildTime, buildId, isProdBuild } = resolveAppBuildMeta(command);
 
   return {
     base: '/',
     define: {
       __APP_VERSION__: JSON.stringify(appVersion),
+      __APP_BUILD_TIME__: JSON.stringify(buildTime),
+      __APP_BUILD_ID__: JSON.stringify(buildId),
+      __IS_PROD_BUILD__: JSON.stringify(isProdBuild),
     },
     plugins: [
       react(),
@@ -95,13 +96,14 @@ export default defineConfig(({ command }) => {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           globIgnores: ['**/assets/aistudio/**', '**/pwa-*.png'],
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallbackDenylist: [/^\/api\//, /^\/__\//],
           ignoreURLParametersMatching: [/.*/],
           runtimeCaching: [
             {
               urlPattern: ({ sameOrigin, url }) =>
                 sameOrigin &&
                 !url.pathname.startsWith('/api/') &&
+                !url.pathname.startsWith('/__/') &&
                 /\.(?:png|jpg|jpeg|svg|gif|webp|ico|woff2?|css|js)$/i.test(url.pathname),
               handler: 'StaleWhileRevalidate',
               options: {

@@ -20,13 +20,23 @@ import {
   FileJson,
   CheckCircle2,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Trash2,
+  CloudUpload,
+  Route
 } from 'lucide-react';
+import { wipeLegacyFirestoreDiaries } from '../services/legacyFirestoreCleanup';
 
 interface DataManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
   diaries: DiaryEntry[];
+  unsyncedCount?: number;
+  excludedDistanceCount?: number;
+  onBatchUploadToServer?: (
+    onProgress?: (current: number, total: number, title: string) => void
+  ) => Promise<{ uploaded: number; skipped: number; failed: number }>;
+  onIncludeAllInDistance?: () => Promise<{ localUpdated: number; serverUpdated: number }>;
   onExport: (options: ExportOptions) => Promise<{ count: number; success: boolean }>;
   onImport: (importedDiaries: DiaryEntry[]) => Promise<{ addedCount: number; updatedCount: number; total: number }>;
   onResetLocalDb?: () => void;
@@ -36,6 +46,10 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
   isOpen,
   onClose,
   diaries,
+  unsyncedCount = 0,
+  excludedDistanceCount = 0,
+  onBatchUploadToServer,
+  onIncludeAllInDistance,
   onExport,
   onImport,
   onResetLocalDb,
@@ -49,6 +63,23 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
     type: 'idle', 
     message: '' 
   });
+  const [batchUploadState, setBatchUploadState] = useState<{
+    running: boolean;
+    message: string;
+    error?: boolean;
+  }>({ running: false, message: '' });
+  const [includeAllState, setIncludeAllState] = useState<{
+    running: boolean;
+    message: string;
+    error?: boolean;
+  }>({ running: false, message: '' });
+  const [legacyWipeState, setLegacyWipeState] = useState<{
+    confirming: boolean;
+    running: boolean;
+    message: string;
+    error?: boolean;
+  }>({ confirming: false, running: false, message: '' });
+  const [confirmLocalReset, setConfirmLocalReset] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -68,6 +99,10 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
       setIsExporting(false);
       setIsImporting(false);
       setImportStatus({ type: 'idle', message: '' });
+      setBatchUploadState({ running: false, message: '' });
+      setIncludeAllState({ running: false, message: '' });
+      setLegacyWipeState({ confirming: false, running: false, message: '' });
+      setConfirmLocalReset(false);
       const d = new Date();
       d.setDate(d.getDate() - 5);
       setStartDate(d.toISOString().slice(0, 10));
@@ -169,6 +204,75 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
     }
   };
 
+  const handleBatchUpload = async () => {
+    if (!onBatchUploadToServer || batchUploadState.running) return;
+    setBatchUploadState({ running: true, message: 'Cloud SQL 서버에 업로드를 시작합니다...', error: false });
+    try {
+      const res = await onBatchUploadToServer((current, total, title) => {
+        setBatchUploadState({
+          running: true,
+          message: `업로드 중 (${current}/${total}): ${title}`,
+          error: false,
+        });
+      });
+      setBatchUploadState({
+        running: false,
+        message: `완료: ${res.uploaded}개 업로드, ${res.skipped}개 이미 최신${res.failed > 0 ? `, ${res.failed}개 실패` : ''}`,
+        error: res.failed > 0,
+      });
+    } catch (err: any) {
+      setBatchUploadState({
+        running: false,
+        message: err?.message || '일괄 업로드 중 오류가 발생했습니다.',
+        error: true,
+      });
+    }
+  };
+
+  const handleIncludeAllDistance = async () => {
+    if (!onIncludeAllInDistance || includeAllState.running) return;
+    setIncludeAllState({ running: true, message: '로컬 및 서버 일기를 누적거리 포함으로 업데이트 중...', error: false });
+    try {
+      const res = await onIncludeAllInDistance();
+      setIncludeAllState({
+        running: false,
+        message: `완료: 로컬 ${res.localUpdated}개, 서버 ${res.serverUpdated}개 누적거리 포함으로 업데이트됨`,
+        error: false,
+      });
+    } catch (err: any) {
+      setIncludeAllState({
+        running: false,
+        message: err?.message || '누적거리 포함 일괄 적용 중 오류가 발생했습니다.',
+        error: true,
+      });
+    }
+  };
+
+  const handleWipeLegacyFirestore = async () => {
+    if (legacyWipeState.running) return;
+    setLegacyWipeState({ confirming: false, running: true, message: '기존 Firestore 데이터 삭제 중...', error: false });
+    try {
+      const res = await wipeLegacyFirestoreDiaries();
+      setLegacyWipeState({
+        confirming: false,
+        running: false,
+        message: `기존 Firestore 정리 완료 (일기 ${res.deletedDiaries}개, 사진 ${res.deletedPhotos}개 삭제)`,
+        error: false,
+      });
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      const isQuota = msg.includes('resource-exhausted') || msg.includes('Quota');
+      setLegacyWipeState({
+        confirming: false,
+        running: false,
+        message: isQuota
+          ? '오늘 Firestore 무료 할당량이 초과되어 내일 초기화 후 다시 실행하거나 Firebase 콘솔에서 삭제해 주세요.'
+          : `삭제 실패: ${msg}`,
+        error: true,
+      });
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -192,7 +296,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                   데이터 관리
                 </h3>
                 <p className="text-xs text-stone-400 mt-0.5">
-                  일기 백업 다운로드 및 JSON 가져오기
+                  일기 백업 다운로드, JSON 가져오기 및 Cloud SQL 동기화
                 </p>
               </div>
             </div>
@@ -232,7 +336,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
               }`}
             >
               <AlertCircle className="w-3.5 h-3.5" />
-              <span>진단</span>
+              <span>동기화 · 진단</span>
             </button>
           </div>
         </div>
@@ -340,7 +444,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                 <div>
                   <h4 className="text-sm font-bold text-white">JSON 파일 가져오기</h4>
                   <p className="text-xs text-stone-400 mt-1 max-w-[260px] mx-auto">
-                    백업된 일기 JSON 파일을 선택하여 로컬 저장소(IndexedDB)에 저장합니다. 서버와 동기화되지 않습니다.
+                    백업된 일기 JSON 파일을 선택하여 로컬 저장소(IndexedDB)에 저장합니다.
                   </p>
                 </div>
                 
@@ -389,6 +493,88 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
             </div>
           ) : activeTab === 'diag' ? (
             <div className="space-y-4">
+              {/* Cloud SQL Batch Upload */}
+              {onBatchUploadToServer && (
+                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-800/40 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-sm font-bold text-emerald-300">
+                      <CloudUpload className="w-4 h-4" />
+                      Cloud SQL 서버 일괄 업로드
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      대기 {unsyncedCount}개
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-stone-300 leading-relaxed">
+                    로컬 기기에 보관 중인 미등록·수정된 일기를 Cloud SQL(PostgreSQL) 서버로 한 번에 업로드합니다.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={batchUploadState.running || unsyncedCount === 0}
+                    onClick={handleBatchUpload}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition disabled:opacity-45 cursor-pointer"
+                  >
+                    {batchUploadState.running ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <CloudUpload className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {batchUploadState.running
+                        ? '업로드 진행 중...'
+                        : unsyncedCount > 0
+                          ? `미등록 일기 ${unsyncedCount}개 일괄 업로드`
+                          : '모두 Cloud SQL에 동기화됨'}
+                    </span>
+                  </button>
+                  {batchUploadState.message && (
+                    <p className={`text-[11px] font-medium ${batchUploadState.error ? 'text-rose-300' : 'text-emerald-300'}`}>
+                      {batchUploadState.message}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Include All Diaries in Cumulative Distance */}
+              {onIncludeAllInDistance && (
+                <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-800/40 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-300">
+                      <Route className="w-4 h-4" />
+                      모든 일기 누적거리 포함 적용
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      제외 {excludedDistanceCount}개
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-stone-300 leading-relaxed">
+                    누적 주행거리 계산에서 제외된 일기를 로컬 저장소와 Cloud SQL 서버 모두 포함 상태로 일괄 업데이트합니다.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={includeAllState.running}
+                    onClick={handleIncludeAllDistance}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition disabled:opacity-45 cursor-pointer"
+                  >
+                    {includeAllState.running ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Route className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {includeAllState.running
+                        ? '업데이트 중...'
+                        : '로컬·서버 모두 누적거리 포함 적용'}
+                    </span>
+                  </button>
+                  {includeAllState.message && (
+                    <p className={`text-[11px] font-medium ${includeAllState.error ? 'text-rose-300' : 'text-emerald-300'}`}>
+                      {includeAllState.message}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="p-4 rounded-xl bg-stone-800/40 border border-stone-700/60 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-bold text-white mb-2">
                   <Database className="w-4 h-4 text-amber-400" />
@@ -410,11 +596,55 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
 
                 {!dbDiag?.persistent && (
                   <div className="p-3 rounded-lg bg-rose-950/20 border border-rose-900/30 text-[11px] text-rose-300 space-y-2">
-                    <p className="font-bold">⚠️ 영구 저장이 비활성된 상태입니다.</p>
+                    <p className="font-bold">영구 저장이 비활성된 상태입니다.</p>
                     <p className="leading-relaxed opacity-90">
                       현재 브라우저에서 IndexedDB 영구 저장이 차단되어 있습니다. 시크릿 모드를 해제하고 일반 브라우저 모드를 사용해주세요.
                     </p>
                   </div>
+                )}
+              </div>
+
+              {/* Legacy Firestore cleanup */}
+              <div className="p-4 rounded-xl bg-stone-800/40 border border-stone-700/60 space-y-2.5">
+                <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
+                  <Trash2 className="w-4 h-4 text-amber-400" />
+                  기존 Firestore 잔여 데이터 삭제
+                </div>
+                <p className="text-[11px] text-stone-400 leading-relaxed">
+                  이전 서버 DB(Firestore)에 남아 있는 문서를 삭제합니다. (무료 일일 할당량 초과 시 내일 초기화 후 실행 가능합니다.)
+                </p>
+                {legacyWipeState.confirming ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleWipeLegacyFirestore}
+                      className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      확인: 기존 Firestore 데이터 삭제
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLegacyWipeState((s) => ({ ...s, confirming: false }))}
+                      className="px-3 py-1.5 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs font-semibold transition cursor-pointer"
+                    >
+                      취소
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={legacyWipeState.running}
+                    onClick={() => setLegacyWipeState({ confirming: true, running: false, message: '' })}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs font-bold border border-stone-600 transition cursor-pointer disabled:opacity-50"
+                  >
+                    {legacyWipeState.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    <span>기존 Firestore 데이터 삭제</span>
+                  </button>
+                )}
+                {legacyWipeState.message && (
+                  <p className={`text-[11px] font-medium ${legacyWipeState.error ? 'text-rose-300' : 'text-emerald-300'}`}>
+                    {legacyWipeState.message}
+                  </p>
                 )}
               </div>
 
@@ -426,18 +656,36 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                 <p className="text-[11px] text-stone-400 leading-relaxed">
                   로컬 데이터베이스를 완전히 초기화합니다. 저장되지 않은 데이터는 삭제되며 복구할 수 없습니다.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (window.confirm('정말로 로컬 데이터베이스를 초기화하시겠습니까? 모든 로컬 데이터가 삭제됩니다.')) {
-                      onResetLocalDb?.();
-                      onClose();
-                    }
-                  }}
-                  className="px-4 py-2 rounded-lg bg-rose-900/40 hover:bg-rose-900/60 text-rose-200 text-xs font-bold border border-rose-800/40 transition"
-                >
-                  로컬 데이터베이스 초기화
-                </button>
+                {confirmLocalReset ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmLocalReset(false);
+                        onResetLocalDb?.();
+                        onClose();
+                      }}
+                      className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      확인: 로컬 데이터 전체 삭제
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmLocalReset(false)}
+                      className="px-3 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold transition cursor-pointer"
+                    >
+                      취소
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmLocalReset(true)}
+                    className="px-4 py-2 rounded-lg bg-rose-900/40 hover:bg-rose-900/60 text-rose-200 text-xs font-bold border border-rose-800/40 transition cursor-pointer"
+                  >
+                    로컬 데이터베이스 초기화
+                  </button>
+                )}
               </div>
             </div>
           ) : null}

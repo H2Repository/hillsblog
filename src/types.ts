@@ -20,6 +20,7 @@ export interface TravelPhoto {
   isChunked?: boolean;
   chunkCount?: number;
   thumbnailUrl?: string;
+  isThumbnailOnly?: boolean;
 }
 
 export interface LocalInsights {
@@ -41,27 +42,13 @@ export interface DiaryEntry {
   moodTags: string[];
   localInsights: LocalInsights;
   rating: number; // 1 to 5
-  views?: number; // Total visitor read count
   hasSubcollectionPhotos?: boolean;
   totalPhotosCount?: number;
   includeInDistance?: boolean;
   createdAt: number;
   updatedAt: number;
   isModified?: boolean;
+  localSyncStatus?: 'synced' | 'needs_update' | 'not_on_server';
 }
 
 export type ViewMode = 'blog' | 'map' | 'timeline';
-
-export interface VisitorLog {
-  id: string;
-  timestamp: number;
-  lat: number;
-  lng: number;
-  city: string;
-  country: string;
-  region: string;
-  diaryId?: string;
-  diaryTitle?: string;
-  device: string;
-  ipMasked?: string;
-}

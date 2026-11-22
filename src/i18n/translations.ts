@@ -42,7 +42,6 @@ export const translations = {
     tabTimeline: '타임라인 여정',
     tabMap: '히스토리 지도',
     tabTimeOfDay: '시간대별 여정',
-    tabFlutter: 'Flutter 앱 코드',
 
     // Hero Banner
     heroTag: ' 여행자의 실시간 여행 기록 공간',
@@ -56,10 +55,6 @@ export const translations = {
     filterRegionLabel: '지역:',
     filterTagLabel: '태그:',
     readFullStory: '전문 읽기',
-    diaryViewsCount: '{count}명이 읽음',
-    diaryViewLabel: '방문자',
-    diaryReadersCount: '이 일기를 읽은 방문자 {count}명',
-    totalVisitorsReads: '누적 방문자 읽음',
     filterHighRating: '만족도 5★ 코스',
     filterWithPhotos: '사진 있는 일기',
     sortLatest: '최신 일자순',
@@ -199,11 +194,6 @@ export const translations = {
 
     // Footer
     footerArchive: '실시간 위치 & 사진 기반  여정 아카이브',
-    footerDownloadFlutter: 'Flutter 소스 다운',
-    footerDownloadFlutterTitle: 'Flutter 모바일 앱 전체 프로젝트 소스코드 다운로드 (.zip)',
-    downloadFlutterZip: 'Flutter 소스 다운로드',
-    flutterSourceTooltip: 'Flutter (Dart) 모바일 앱 전체 프로젝트 소스코드 다운로드 (.zip)',
-    viewFlutterCode: 'Flutter 코드 보기',
     footerCopyright: "Hill's Blog. All rights reserved.",
   },
   en: {
@@ -228,7 +218,6 @@ export const translations = {
     tabTimeline: 'Timeline Journey',
     tabMap: 'Interactive Map',
     tabTimeOfDay: 'Time-of-Day Journey',
-    tabFlutter: 'Flutter App Code',
 
     heroTag: 'Real-time Travel log for travelers',
     heroTitle: 'Finding leisure and peace in a new environment',
@@ -240,10 +229,6 @@ export const translations = {
     filterRegionLabel: 'Region:',
     filterTagLabel: 'Tag:',
     readFullStory: 'Read Full Story',
-    diaryViewsCount: '{count} reads',
-    diaryViewLabel: 'Visitors',
-    diaryReadersCount: '{count} visitors read this diary',
-    totalVisitorsReads: 'Total Reads',
     filterHighRating: '5★ Top Rated',
     filterWithPhotos: 'With Photos',
     sortLatest: 'Latest Date',
@@ -378,11 +363,6 @@ export const translations = {
     confirmCancel: 'Cancel',
 
     footerArchive: 'Real-time Location & Photo-based Travel Journey Archive',
-    footerDownloadFlutter: 'Download Flutter Source',
-    footerDownloadFlutterTitle: 'Download Complete Flutter Mobile App Project (.zip)',
-    downloadFlutterZip: 'Download Flutter Source',
-    flutterSourceTooltip: 'Download entire Flutter (Dart) mobile app project source code (.zip)',
-    viewFlutterCode: 'View Flutter Code',
     footerCopyright: "Hill's Blog. All rights reserved.",
   },
   ja: {
@@ -407,7 +387,6 @@ export const translations = {
     tabTimeline: 'タイムライン旅程',
     tabMap: 'インタラクティブ地図',
     tabTimeOfDay: '時間帯別旅程',
-    tabFlutter: 'Flutterアプリコード',
 
     heroTag: '自転車ツーリング愛好家のためのリアルタイム走行記録',
     heroTitle: '新しい環境で手にする、ゆとりと安らぎ',
@@ -419,10 +398,6 @@ export const translations = {
     filterRegionLabel: '地域:',
     filterTagLabel: 'タグ:',
     readFullStory: '全文を読む',
-    diaryViewsCount: '{count}人が閲覧',
-    diaryViewLabel: '訪問者',
-    diaryReadersCount: 'この日記を読んだ訪問者 {count}名',
-    totalVisitorsReads: '累計閲覧数',
     filterHighRating: '満足度5★コース',
     filterWithPhotos: '写真付き日記',
     sortLatest: '最新日付順',
@@ -557,11 +532,6 @@ export const translations = {
     confirmCancel: 'キャンセル',
 
     footerArchive: 'リアルタイム位置＆写真基盤 自転車ツーリングアーカイブ',
-    footerDownloadFlutter: 'Flutterソースダウンロード',
-    footerDownloadFlutterTitle: 'Flutterモバイルアプリプロジェクト全体のソースコードダウンロード (.zip)',
-    downloadFlutterZip: 'Flutterソースダウンロード',
-    flutterSourceTooltip: 'Flutter (Dart) モバイルアプリの全ソースコードをダウンロード (.zip)',
-    viewFlutterCode: 'Flutterコード表示',
     footerCopyright: "Hill's Blog. All rights reserved.",
   },
   vi: {
@@ -586,7 +556,6 @@ export const translations = {
     tabTimeline: 'Dòng thời gian',
     tabMap: 'Bản đồ tương tác',
     tabTimeOfDay: 'Hành trình theo giờ',
-    tabFlutter: 'Mã nguồn Flutter',
 
     heroTag: 'Không gian lưu giữ hành trình đạp xe thời gian thực',
     heroTitle: 'Tìm thấy sự thư thái trong môi trường mới',
@@ -598,10 +567,6 @@ export const translations = {
     filterRegionLabel: 'Khu vực:',
     filterTagLabel: 'Thẻ:',
     readFullStory: 'Đọc toàn bộ',
-    diaryViewsCount: '{count} lượt đọc',
-    diaryViewLabel: 'Lượt xem',
-    diaryReadersCount: '{count} du khách đã đọc nhật ký này',
-    totalVisitorsReads: 'Tổng lượt đọc',
     filterHighRating: 'Đánh giá 5★',
     filterWithPhotos: 'Có hình ảnh',
     sortLatest: 'Mới nhất',
@@ -736,11 +701,6 @@ export const translations = {
     confirmCancel: 'Hủy',
 
     footerArchive: 'Kho lưu trữ hành trình đạp xe dựa trên định vị & hình ảnh thời gian thực',
-    footerDownloadFlutter: 'Tải mã nguồn Flutter',
-    footerDownloadFlutterTitle: 'Tải toàn bộ mã nguồn dự án ứng dụng Flutter (.zip)',
-    downloadFlutterZip: 'Tải mã nguồn Flutter',
-    flutterSourceTooltip: 'Tải toàn bộ mã nguồn dự án ứng dụng di động Flutter (.zip)',
-    viewFlutterCode: 'Xem mã nguồn Flutter',
     footerCopyright: "Hill's Blog. All rights reserved.",
   },
   es: {
@@ -765,7 +725,6 @@ export const translations = {
     tabTimeline: 'Cronología de viaje',
     tabMap: 'Mapa interactivo',
     tabTimeOfDay: 'Ruta por horas',
-    tabFlutter: 'Código Flutter',
 
     heroTag: 'Registro en tiempo real para cicloturistas',
     heroTitle: 'Encontrar tranquilidad y calma en un nuevo entorno',
@@ -777,10 +736,6 @@ export const translations = {
     filterRegionLabel: 'Región:',
     filterTagLabel: 'Etiqueta:',
     readFullStory: 'Leer historia completa',
-    diaryViewsCount: '{count} lecturas',
-    diaryViewLabel: 'Visitantes',
-    diaryReadersCount: '{count} visitantes leyeron este diario',
-    totalVisitorsReads: 'Lecturas totales',
     filterHighRating: 'Puntuación 5★',
     filterWithPhotos: 'Con fotos',
     sortLatest: 'Más recientes',
@@ -915,11 +870,6 @@ export const translations = {
     confirmCancel: 'Cancelar',
 
     footerArchive: 'Archivo de rutas ciclistas basado en GPS y fotografías en tiempo real',
-    footerDownloadFlutter: 'Descargar código Flutter',
-    footerDownloadFlutterTitle: 'Descargar el proyecto completo de la app Flutter (.zip)',
-    downloadFlutterZip: 'Descargar código Flutter',
-    flutterSourceTooltip: 'Descargar el código fuente completo del proyecto móvil Flutter (.zip)',
-    viewFlutterCode: 'Ver código Flutter',
     footerCopyright: "Hill's Blog. Todos los derechos reservados.",
   }
 } as const;

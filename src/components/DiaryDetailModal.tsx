@@ -25,8 +25,6 @@ import {
   Compass,
   Languages,
   Loader2,
-  Eye,
-  Users,
   Camera,
   CloudOff,
   CheckCircle2,
@@ -34,7 +32,49 @@ import {
   Upload
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { ServerDiarySyncStatus } from '../services/diaryFirestore';
+import { ServerDiarySyncStatus } from '../services/diaryCloudSql';
+import { filterValidPhotos } from '../utils/storage';
+import { useDisplayImageUrl } from '../utils/imageDisplay';
+
+const DetailHeroImage: React.FC<{
+  src: string;
+  alt: string;
+  onError: () => void;
+}> = ({ src, alt, onError }) => {
+  const displayUrl = useDisplayImageUrl(src, 1280, 0.82);
+  if (!displayUrl) {
+    return <div className="w-full h-full bg-stone-800 animate-pulse" />;
+  }
+  return (
+    <img
+      src={displayUrl}
+      alt={alt}
+      className="w-full h-full object-cover group-hover:scale-102 transition duration-500"
+      decoding="async"
+      onError={onError}
+    />
+  );
+};
+
+const DetailThumbImage: React.FC<{
+  src: string;
+  onError: () => void;
+}> = ({ src, onError }) => {
+  const displayUrl = useDisplayImageUrl(src, 160, 0.7);
+  if (!displayUrl) {
+    return <div className="w-full h-full bg-stone-200 animate-pulse" />;
+  }
+  return (
+    <img
+      src={displayUrl}
+      alt=""
+      className="w-full h-full object-cover"
+      loading="lazy"
+      decoding="async"
+      onError={onError}
+    />
+  );
+};
 
 interface DiaryDetailModalProps {
   diary: DiaryEntry | null;
@@ -70,16 +110,18 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   hasPrev = false,
 }) => {
   const { t, language } = useLanguage();
-  const { isAdmin } = useAuth();
+  const { canEditLocal } = useAuth();
   const [copied, setCopied] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [asyncDiary, setAsyncDiary] = useState<DiaryEntry | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
     setShowOriginal(false);
+    setFailedPhotoIds({});
   }, [diary?.id, isOpen]);
 
   useEffect(() => {
@@ -218,7 +260,9 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   };
 
   const WeatherIcon = weatherIcons[displayDiary.weather]?.icon || Sun;
-  const coverPhoto = displayDiary.photos.find(p => p.isCover) || displayDiary.photos[0];
+  const validPhotos = filterValidPhotos(displayDiary.photos).filter((p) => !failedPhotoIds[p.id]);
+  const coverPhoto = validPhotos.find((p) => p.isCover) || validPhotos[0];
+  const coverIndex = coverPhoto ? Math.max(0, validPhotos.findIndex((p) => p.id === coverPhoto.id)) : 0;
 
   const handleShare = () => {
     const text = `[${t('appTitle')}] ${displayDiary.title}\n📍 ${displayDiary.location.region} (${displayDiary.date})\n\n"${displayDiary.content.slice(0, 100)}..."`;
@@ -241,17 +285,6 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
             <span className="text-[11px] sm:text-xs text-stone-400">
               {displayDiary.date} <span className="hidden xs:inline">{displayDiary.time}</span>
             </span>
-
-            {/* Visitor Read Count Badge in Modal Header (Admin Only) */}
-            {isAdmin && (
-              <span 
-                className="flex items-center gap-1 text-[11px] sm:text-xs text-stone-300 bg-stone-800/90 border border-stone-700/80 px-2 sm:px-2.5 py-0.5 rounded-full font-medium"
-                title={t('diaryReadersCount', { count: (displayDiary.views || 0).toLocaleString() })}
-              >
-                <Eye className="w-3.5 h-3.5 text-amber-400" />
-                <span>{t('diaryViewsCount', { count: (displayDiary.views || 0).toLocaleString() })}</span>
-              </span>
-            )}
 
             {/* Translation status badge and original toggle */}
             {language !== 'ko' && (
@@ -313,14 +346,14 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
                 ) : (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                 )}
-                <span className="hidden sm:inline">
+                <span className="text-[11px] sm:text-xs">
                   {isUploadingToServer
-                    ? '반영 중...'
+                    ? '전송 중'
                     : serverStatus === 'not_on_server'
-                      ? '서버 추가'
+                      ? '미등록'
                       : serverStatus === 'needs_update'
-                        ? '서버 업데이트'
-                        : '서버 반영됨'}
+                        ? '수정됨'
+                        : '서버됨'}
                 </span>
               </button>
             )}
@@ -335,31 +368,35 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
               <span className="hidden sm:inline">{copied ? t('btnShared') : t('btnShare')}</span>
             </button>
 
-            {/* Admin only actions: Edit & Delete */}
-            {isAdmin && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onEdit(diary)}
-                  className="p-1.5 rounded-lg transition text-xs flex items-center gap-1 cursor-pointer text-stone-400 hover:text-white hover:bg-stone-800"
-                  title={t('cardEdit')}
-                >
-                  <Edit3 className="w-4 h-4" />
-                  <span className="hidden sm:inline">{t('cardEdit')}</span>
-                </button>
+            {/* Local actions: Edit & Delete (require app passcode or admin login) */}
+            <button
+              type="button"
+              onClick={() => onEdit(diary)}
+              className={`p-1.5 rounded-lg transition text-xs flex items-center gap-1 cursor-pointer ${
+                canEditLocal
+                  ? 'text-stone-400 hover:text-white hover:bg-stone-800'
+                  : 'text-stone-500 hover:text-amber-300 hover:bg-stone-800'
+              }`}
+              title={canEditLocal ? t('cardEdit') : '수정 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
+            >
+              <Edit3 className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('cardEdit')}</span>
+            </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDelete(diary);
-                  }}
-                  className="p-1.5 rounded-lg transition text-xs cursor-pointer text-stone-400 hover:text-rose-400 hover:bg-stone-800"
-                  title={t('cardDelete')}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                onDelete(diary);
+              }}
+              className={`p-1.5 rounded-lg transition text-xs cursor-pointer ${
+                canEditLocal
+                  ? 'text-stone-400 hover:text-rose-400 hover:bg-stone-800'
+                  : 'text-stone-500 hover:text-amber-300 hover:bg-stone-800'
+              }`}
+              title={canEditLocal ? t('cardDelete') : '삭제 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
 
             <div className="w-px h-4 bg-stone-700 mx-1" />
 
@@ -379,19 +416,21 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
           {coverPhoto && (
             <div
               className="relative w-full h-72 sm:h-96 bg-stone-900 cursor-pointer overflow-hidden group"
-              onClick={() => onOpenPhotoLightbox(displayDiary.photos, 0)}
+              onClick={() => onOpenPhotoLightbox(validPhotos, coverIndex)}
             >
-              <img
+              <DetailHeroImage
                 src={coverPhoto.url}
                 alt={coverPhoto.caption || displayDiary.title}
-                className="w-full h-full object-cover group-hover:scale-102 transition duration-500"
+                onError={() =>
+                  setFailedPhotoIds((prev) => ({ ...prev, [coverPhoto.id]: true }))
+                }
               />
               <div className="absolute inset-0 bg-gradient-to-t from-stone-950/80 via-transparent to-black/20" />
 
               {/* Photo Count badge */}
               <div className="absolute top-4 right-4 bg-stone-900/80 backdrop-blur-md text-white text-xs px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-1.5">
                 <Camera className="w-3.5 h-3.5 text-amber-300" />
-                <span>{t('totalPhotosCount', { count: Math.max(displayDiary.totalPhotosCount || 0, displayDiary.photos.length) })}</span>
+                <span>{t('totalPhotosCount', { count: Math.max(displayDiary.totalPhotosCount || 0, validPhotos.length) })}</span>
               </div>
 
               {/* Cover Caption */}
@@ -404,17 +443,22 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
           )}
 
           {/* Photo Thumbnail Strip if multiple photos */}
-          {(displayDiary.photos.length > 1 || (displayDiary.totalPhotosCount || 0) > 1) && (
+          {validPhotos.length > 1 && (
             <div className="px-6 py-3 bg-stone-100/70 border-b border-stone-200 flex items-center gap-2.5 overflow-x-auto">
-              {displayDiary.photos.map((photo, idx) => (
+              {validPhotos.map((photo, idx) => (
                 <button
                   key={photo.id || idx}
                   type="button"
-                  onClick={() => onOpenPhotoLightbox(displayDiary.photos, idx)}
+                  onClick={() => onOpenPhotoLightbox(validPhotos, idx)}
                   className="w-16 h-16 rounded-xl overflow-hidden border-2 border-white shadow-sm shrink-0 hover:opacity-90 hover:scale-105 transition cursor-pointer"
                   title={photo.caption || `사진 ${idx + 1}`}
                 >
-                  <img src={photo.url} alt="" className="w-full h-full object-cover" />
+                  <DetailThumbImage
+                    src={photo.url}
+                    onError={() =>
+                      setFailedPhotoIds((prev) => ({ ...prev, [photo.id]: true }))
+                    }
+                  />
                 </button>
               ))}
             </div>
@@ -450,17 +494,6 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
                   ))}
                 </div>
 
-                {/* Visitor read count in story metadata (Admin Only) */}
-                {isAdmin && (
-                  <>
-                    <span>•</span>
-                    <span className="flex items-center gap-1 font-medium text-amber-800 bg-amber-50/80 border border-amber-200/60 px-2 py-0.5 rounded" title={t('diaryReadersCount', { count: (displayDiary.views || 0).toLocaleString() })}>
-                      <Eye className="w-3.5 h-3.5 text-amber-600" />
-                      <span>{t('diaryViewsCount', { count: (displayDiary.views || 0).toLocaleString() })}</span>
-                    </span>
-                  </>
-                )}
-
                 {displayDiary.location.isRealtimeGps && (
                   <span className="ml-auto text-[11px] text-emerald-600 font-medium flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded">
                     🟢 {t('realtimeGpsLinked')}
@@ -488,22 +521,6 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
               <h1 className="text-xl sm:text-2xl font-bold text-stone-900 leading-snug tracking-tight mb-3">
                 {displayDiary.title}
               </h1>
-
-              {/* Reader / Visitor Count Banner (Admin Only) */}
-              {isAdmin && (
-                <div className="flex items-center justify-between text-xs py-2 px-3.5 rounded-xl bg-amber-50/80 border border-amber-200/70 text-amber-900 shadow-2xs">
-                  <div className="flex items-center gap-2">
-                    <Users className="w-4 h-4 text-amber-700 shrink-0" />
-                    <span className="font-semibold">
-                      {t('diaryReadersCount', { count: (displayDiary.views || 0).toLocaleString() })}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1 text-stone-500 text-[11px] font-medium">
-                    <Eye className="w-3.5 h-3.5 text-amber-600" />
-                    <span>{(displayDiary.views || 0).toLocaleString()} {t('diaryViewLabel')}</span>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Story Paragraphs */}

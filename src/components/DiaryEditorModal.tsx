@@ -8,6 +8,8 @@ import {
   getDiaryPayloadSizeBytes, 
   formatBytes 
 } from '../utils/imageCompressor';
+import { filterValidPhotos } from '../utils/storage';
+import { useDisplayImageUrl } from '../utils/imageDisplay';
 import L from 'leaflet';
 import { 
   X, 
@@ -73,6 +75,22 @@ const PRESET_TAGS = [
   '#야간라이딩',
   '#자전거종주',
 ];
+
+const EditorPhotoThumb: React.FC<{ src: string }> = ({ src }) => {
+  const displayUrl = useDisplayImageUrl(src, 320, 0.72);
+  if (!displayUrl) {
+    return <div className="w-full h-full bg-stone-200 animate-pulse" />;
+  }
+  return (
+    <img
+      src={displayUrl}
+      alt=""
+      className="w-full h-full object-cover"
+      loading="lazy"
+      decoding="async"
+    />
+  );
+};
 
 export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   isOpen,
@@ -143,6 +161,10 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
   const [showResetNotice, setShowResetNotice] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const editingEntryIdRef = useRef<string | null>(initialEntry?.id || null);
+  const editingEntryCreatedAtRef = useRef<number | null>(initialEntry?.createdAt || null);
+  const editingEntryStatusRef = useRef<DiaryEntry['localSyncStatus'] | undefined>(initialEntry?.localSyncStatus);
 
   // Mini Map ref
   const miniMapContainerRef = useRef<HTMLDivElement>(null);
@@ -194,6 +216,9 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
     if (!isOpen) return;
 
     if (initialEntry) {
+      editingEntryIdRef.current = initialEntry.id;
+      editingEntryCreatedAtRef.current = initialEntry.createdAt || null;
+      editingEntryStatusRef.current = initialEntry.localSyncStatus;
       setTitle(initialEntry.title || '');
       setContent(initialEntry.content || '');
       setDate(initialEntry.date);
@@ -205,7 +230,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         ...initialEntry.location,
         includeInDistance: initialEntry.location?.includeInDistance !== false && initialEntry.includeInDistance !== false,
       });
-      setPhotos(initialEntry.photos || []);
+      setPhotos(filterValidPhotos(initialEntry.photos));
       setRecommendedForSolo(initialEntry.localInsights.recommendedForSolo || '');
       setLocalFood(initialEntry.localInsights.localFood || '');
       setTransportTip(initialEntry.localInsights.transportTip || '');
@@ -213,6 +238,9 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
       setTagInput('');
       setGpsMessage(null);
     } else {
+      editingEntryIdRef.current = null;
+      editingEntryCreatedAtRef.current = null;
+      editingEntryStatusRef.current = undefined;
       // Clean reset to empty defaults for new diary
       resetForm();
       // Try auto-fetching real-time GPS on new modal open if available
@@ -494,15 +522,22 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
     setMoodTags(prev => prev.filter(t => t !== tagToRemove));
   };
 
-  // Dynamic calculation of total diary creation payload (supports up to 3MB per photo, 10MB total diary)
-  const currentPayloadBytes = useMemo(() => {
+  // Fast byte-size calculation without re-serializing multi-MB base64 photo strings on every keystroke
+  const photosPayloadBytes = useMemo(() => {
+    let total = 0;
+    for (const p of photos) {
+      total += (p.url?.length || 0) + (p.thumbnailUrl?.length || 0) + (p.caption?.length || 0) * 3 + 128;
+    }
+    return total;
+  }, [photos]);
+
+  const textPayloadBytes = useMemo(() => {
     return getDiaryPayloadSizeBytes({
       title,
       content,
       date,
       time,
       location,
-      photos,
       weather,
       moodTags,
       rating,
@@ -513,13 +548,15 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
         soloTravelTip,
       },
     });
-  }, [title, content, date, time, location, photos, weather, moodTags, rating, recommendedForSolo, localFood, transportTip, soloTravelTip]);
+  }, [title, content, date, time, location, weather, moodTags, rating, recommendedForSolo, localFood, transportTip, soloTravelTip]);
+
+  const currentPayloadBytes = textPayloadBytes + photosPayloadBytes;
 
   const isOverLimit = currentPayloadBytes > MAX_DIARY_PAYLOAD_BYTES;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSaving) return;
+    if (isSaving || isSubmittingRef.current) return;
     setFormError(null);
 
     if (!title.trim()) {
@@ -531,40 +568,63 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
       return;
     }
 
-    if (isOverLimit) {
-      setFormError(`일기 작성 전체 용량(${formatBytes(currentPayloadBytes)})이 최대 허용 용량인 10MB를 초과했습니다. 첨부된 사진 수를 줄이거나 조절해주세요.`);
-      return;
-    }
-
-    const newDiary: DiaryEntry = {
-      id: initialEntry ? initialEntry.id : `diary-${Date.now()}`,
-      title: title.trim(),
-      content: content.trim(),
-      date,
-      time,
-      location: {
-        ...location,
-        includeInDistance: location.includeInDistance !== false,
-      },
-      photos,
-      weather,
-      moodTags,
-      localInsights: {
-        recommendedForSolo: recommendedForSolo.trim() || '혼자만의 시간을 오롯이 느끼기 좋은 여유로운 장소',
-        localFood: localFood.trim() || undefined,
-        transportTip: transportTip.trim() || undefined,
-        soloTravelTip: soloTravelTip.trim() || undefined,
-      },
-      rating,
-      views: initialEntry?.views ?? 0,
-      includeInDistance: location.includeInDistance !== false,
-      createdAt: initialEntry ? (initialEntry.createdAt || (Date.now() - 3600000)) : Date.now(),
-      updatedAt: Date.now(),
-      isModified: Boolean(initialEntry),
-    };
-
+    isSubmittingRef.current = true;
     setIsSaving(true);
     try {
+      let finalPhotos = photos;
+      if (isOverLimit && photos.length > 0) {
+        const perPhotoMaxBytes = Math.max(
+          450_000,
+          Math.floor((MAX_DIARY_PAYLOAD_BYTES * 0.65) / Math.max(1, photos.length))
+        );
+        const compressedList: TravelPhoto[] = [];
+        for (const p of photos) {
+          if (p.url && p.url.startsWith('data:image/') && Math.round((p.url.length * 3) / 4) > perPhotoMaxBytes) {
+            try {
+              const res = await compressPhotoToHd(p.url, 0.82, perPhotoMaxBytes, 1920);
+              compressedList.push({ ...p, url: res.dataUrl });
+              continue;
+            } catch {}
+          }
+          compressedList.push(p);
+        }
+        finalPhotos = compressedList;
+        setPhotos(compressedList);
+      }
+
+      const resolvedEditId = editingEntryIdRef.current || initialEntry?.id || null;
+      const isEditMode = Boolean(resolvedEditId);
+      const preservedCreatedAt = isEditMode
+        ? (editingEntryCreatedAtRef.current || initialEntry?.createdAt || (Date.now() - 3600000))
+        : Date.now();
+
+      const newDiary: DiaryEntry = {
+        id: resolvedEditId || `diary-${Date.now()}`,
+        title: title.trim(),
+        content: content.trim(),
+        date,
+        time,
+        location: {
+          ...location,
+          includeInDistance: location.includeInDistance !== false,
+        },
+        photos: finalPhotos,
+        weather,
+        moodTags,
+        localInsights: {
+          recommendedForSolo: recommendedForSolo.trim() || '혼자만의 시간을 오롯이 느끼기 좋은 여유로운 장소',
+          localFood: localFood.trim() || undefined,
+          transportTip: transportTip.trim() || undefined,
+          soloTravelTip: soloTravelTip.trim() || undefined,
+        },
+        rating,
+        includeInDistance: location.includeInDistance !== false,
+        createdAt: preservedCreatedAt,
+        updatedAt: Date.now(),
+        isModified: isEditMode,
+        localSyncStatus: isEditMode ? editingEntryStatusRef.current : 'not_on_server',
+      };
+
       const result = await onSave(newDiary);
       if (result !== false) {
         onClose();
@@ -574,6 +634,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
     } catch {
       setFormError('일기 저장 중 오류가 발생했습니다. 다시 시도해주세요.');
     } finally {
+      isSubmittingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -848,7 +909,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                   </h3>
                 </div>
                 <p className="text-[11px] text-stone-500 mt-0.5">
-                  사진 용량은 장당 최대 3MB까지 지원되며, 일기는 사진 첨부 포함 최대 10MB까지 작성할 수 있습니다.
+                  사진 용량은 장당 최대 3MB까지 자동 최적화되며, 여러 장의 사진도 안전하게 저장 및 업로드됩니다.
                 </p>
               </div>
 
@@ -915,11 +976,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                     className="group relative rounded-xl overflow-hidden border border-stone-200 bg-stone-100 flex flex-col"
                   >
                     <div className="relative h-28 w-full">
-                      <img
-                        src={photo.url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
+                      <EditorPhotoThumb src={photo.thumbnailUrl || photo.url} />
                       {photo.isCover && (
                         <span className="absolute top-2 left-2 bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow">
                           대표 사진
@@ -1254,16 +1311,16 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
                 </span>
               </button>
 
-              {/* 10MB Capacity Meter & 3MB Photo limit */}
+              {/* 30MB Capacity Meter & 3MB Photo limit */}
               <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1 rounded-lg bg-stone-100 border border-stone-200 text-[11px] sm:text-xs">
                 <span className="text-stone-500 text-[10px] sm:text-[11px]">용량:</span>
-                <span className={`font-mono text-[11px] sm:text-xs font-bold ${isOverLimit ? 'text-rose-600' : 'text-stone-700'}`}>
-                  {formatBytes(currentPayloadBytes)} / 10MB
+                <span className={`font-mono text-[11px] sm:text-xs font-bold ${isOverLimit ? 'text-amber-600' : 'text-stone-700'}`}>
+                  {formatBytes(currentPayloadBytes)} / 30MB
                 </span>
                 <div className="w-12 sm:w-16 h-1.5 rounded-full bg-stone-200 overflow-hidden hidden xs:block">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      isOverLimit ? 'bg-rose-500' : currentPayloadBytes > 7000000 ? 'bg-amber-500' : 'bg-emerald-500'
+                      isOverLimit ? 'bg-amber-500' : currentPayloadBytes > 21_000_000 ? 'bg-amber-500' : 'bg-emerald-500'
                     }`}
                     style={{ width: `${Math.min(100, (currentPayloadBytes / MAX_DIARY_PAYLOAD_BYTES) * 100)}%` }}
                   />
@@ -1284,7 +1341,7 @@ export const DiaryEditorModal: React.FC<DiaryEditorModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isOverLimit || isSaving}
+                disabled={isSaving}
                 className="flex-1 sm:flex-initial px-5 sm:px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold shadow-md shadow-amber-900/30 transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer text-center"
               >
                 {isSaving ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Check className="w-4 h-4 shrink-0" />}

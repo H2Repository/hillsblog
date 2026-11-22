@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { DiaryEntry } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { useAuth } from '../context/AuthContext';
 import { getLocalizedDiary } from '../utils/translationService';
 import { useTranslationVersion } from '../utils/translationService';
-import { calculateDistanceKm } from '../utils/geo';
+import { useRoadDistances } from '../services/roadDistanceService';
+import { filterValidPhotos } from '../utils/storage';
 import { 
   MapPin, 
   Calendar, 
@@ -15,8 +15,7 @@ import {
   Camera, 
   Route, 
   ChevronRight,
-  Sparkles,
-  Eye
+  Sparkles
 } from 'lucide-react';
 
 interface TimelineViewProps {
@@ -31,9 +30,10 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
   onViewOnMap,
 }) => {
   const { t, language } = useLanguage();
-  const { isAdmin } = useAuth();
   const [ascending, setAscending] = useState(true);
+  const [failedPhotoKeys, setFailedPhotoKeys] = useState<Record<string, boolean>>({});
   const translationVersion = useTranslationVersion();
+  const { getSegmentDistance } = useRoadDistances(diaries);
 
   // Localize diaries
   const localizedDiaries = useMemo(() => {
@@ -85,7 +85,10 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
       {/* Timeline List */}
       <div className="relative pl-6 sm:pl-8 space-y-8 before:absolute before:left-3 sm:before:left-4 before:top-4 before:bottom-4 before:w-0.5 before:bg-amber-300">
         {sorted.map((diary, idx) => {
-          const coverPhoto = diary.photos.find(p => p.isCover) || diary.photos[0];
+          const validPhotos = filterValidPhotos(diary.photos).filter(
+            (p) => !failedPhotoKeys[`${diary.id}:${p.id}`]
+          );
+          const coverPhoto = validPhotos.find(p => p.isCover) || validPhotos[0];
           const isIncluded = (diary.location?.includeInDistance ?? diary.includeInDistance ?? true) !== false;
           let distFromPrev: number | null = null;
 
@@ -94,12 +97,7 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
             for (let pIdx = idx - 1; pIdx >= 0; pIdx--) {
               const pDiary = sorted[pIdx];
               if ((pDiary.location?.includeInDistance ?? pDiary.includeInDistance ?? true) !== false) {
-                distFromPrev = calculateDistanceKm(
-                  pDiary.location.lat,
-                  pDiary.location.lng,
-                  diary.location.lat,
-                  diary.location.lng
-                );
+                distFromPrev = getSegmentDistance(pDiary.location, diary.location).km;
                 break;
               }
             }
@@ -139,10 +137,17 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                         src={coverPhoto.url}
                         alt=""
                         className="w-full h-full object-cover group-hover:scale-103 transition duration-300"
+                        decoding="async"
+                        onError={() =>
+                          setFailedPhotoKeys((prev) => ({
+                            ...prev,
+                            [`${diary.id}:${coverPhoto.id}`]: true,
+                          }))
+                        }
                       />
-                      {diary.photos.length > 1 && (
+                      {validPhotos.length > 1 && (
                         <span className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur">
-                          +{diary.photos.length}
+                          +{validPhotos.length}
                         </span>
                       )}
                     </div>
@@ -161,15 +166,6 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                             <Calendar className="w-3 h-3" />
                             {diary.date} {diary.time}
                           </span>
-                          {isAdmin && (
-                            <span 
-                              className="flex items-center gap-1 text-stone-600 font-medium bg-stone-100 px-1.5 py-0.5 rounded text-[11px]"
-                              title={t('diaryReadersCount', { count: (diary.views || 0).toLocaleString() })}
-                            >
-                              <Eye className="w-3 h-3 text-amber-600" />
-                              <span>{(diary.views || 0).toLocaleString()}</span>
-                            </span>
-                          )}
                         </div>
                       </div>
 

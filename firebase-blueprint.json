@@ -84,10 +84,6 @@
           "type": "number",
           "description": "Star rating from 1 to 5"
         },
-        "views": {
-          "type": "number",
-          "description": "Total number of visitors who read this diary entry"
-        },
         "hasSubcollectionPhotos": {
           "type": "boolean",
           "description": "Indicates whether additional attached photos are stored in the subcollection"
@@ -103,65 +99,31 @@
       },
       "required": ["id", "title", "content", "date", "time", "location", "rating", "createdAt", "updatedAt"]
     },
-    "VisitorLog": {
-      "title": "VisitorLog",
-      "description": "Log of a visitor's geolocation and reading session for administrative traffic analytics",
+    "AppVersionMeta": {
+      "title": "AppVersionMeta",
+      "description": "Tracks deployed build IDs and sequential deployment version counters",
       "type": "object",
       "properties": {
-        "id": {
+        "lastBuildId": {
           "type": "string",
-          "description": "Unique identifier for the visitor log entry",
-          "maxLength": 128
+          "description": "Unique build timestamp identifier from Vite build",
+          "maxLength": 64
         },
-        "timestamp": {
+        "deployCount": {
           "type": "number",
-          "description": "Access timestamp in milliseconds"
+          "description": "Sequential published build counter"
         },
-        "lat": {
+        "buildTime": {
+          "type": "string",
+          "description": "Formatted KST build time (YYMMDDHHmm)",
+          "maxLength": 32
+        },
+        "updatedAt": {
           "type": "number",
-          "description": "Visitor latitude"
-        },
-        "lng": {
-          "type": "number",
-          "description": "Visitor longitude"
-        },
-        "city": {
-          "type": "string",
-          "description": "Visitor city name",
-          "maxLength": 100
-        },
-        "country": {
-          "type": "string",
-          "description": "Visitor country name",
-          "maxLength": 100
-        },
-        "region": {
-          "type": "string",
-          "description": "Visitor province/region name",
-          "maxLength": 100
-        },
-        "diaryId": {
-          "type": "string",
-          "description": "ID of the diary read, or home",
-          "maxLength": 128
-        },
-        "diaryTitle": {
-          "type": "string",
-          "description": "Title of the diary read",
-          "maxLength": 300
-        },
-        "device": {
-          "type": "string",
-          "description": "Device category: mobile, desktop, or tablet",
-          "maxLength": 50
-        },
-        "ipMasked": {
-          "type": "string",
-          "description": "Anonymized IP representation",
-          "maxLength": 100
+          "description": "Timestamp in milliseconds when this deployment was registered"
         }
       },
-      "required": ["id", "timestamp", "lat", "lng"]
+      "required": ["lastBuildId", "deployCount", "buildTime", "updatedAt"]
     }
   },
   "firestore": {
@@ -173,9 +135,9 @@
       "schema": "TravelPhoto",
       "description": "Subcollection of HD travel photos attached to a diary entry allowing total diary creation up to 2MB"
     },
-    "/visitor_logs/{logId}": {
-      "schema": "VisitorLog",
-      "description": "Collection of visitor geo-location logs. General visitors can create logs upon visiting, only admin users can read and clear logs."
+    "/app_meta/{docId}": {
+      "schema": "AppVersionMeta",
+      "description": "Stores deployed build version counter metadata under app_meta/version"
     }
   }
 }

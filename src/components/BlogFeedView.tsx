@@ -22,58 +22,80 @@ import {
   Trash2, 
   Share2,
   Plus,
-  Lock,
-  Eye,
-  Users,
   ChevronDown,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
-  RotateCcw,
   Loader2,
   CloudOff,
   CheckCircle2,
   RefreshCw
 } from 'lucide-react';
-import { calculateDistanceKm } from '../utils/geo';
 import { useAuth } from '../context/AuthContext';
-import { getDiaryServerStatus, ServerDiaryMeta } from '../services/diaryFirestore';
+import { getDiaryServerStatus, ServerDiaryMeta } from '../services/diaryCloudSql';
+import { sortDiariesChronological, useRoadDistances } from '../services/roadDistanceService';
+import { filterValidPhotos } from '../utils/storage';
+import { useDisplayImageUrl } from '../utils/imageDisplay';
 
-const INITIAL_VISIBLE_COUNT = 10;
-const PAGE_SIZE = 10;
+const INITIAL_VISIBLE_COUNT = 4;
+const PAGE_SIZE = 4;
+
+const FeedCoverImage: React.FC<{
+  src: string;
+  alt: string;
+  onError: () => void;
+}> = ({ src, alt, onError }) => {
+  const displayUrl = useDisplayImageUrl(src, 520, 0.74);
+  if (!displayUrl) {
+    return <div className="w-full h-full bg-stone-200 animate-pulse" />;
+  }
+  return (
+    <img
+      src={displayUrl}
+      alt={alt}
+      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-500"
+      loading="lazy"
+      decoding="async"
+      onError={onError}
+    />
+  );
+};
 
 interface BlogFeedViewProps {
   diaries: DiaryEntry[];
   serverMetaMap: Record<string, ServerDiaryMeta>;
+  hasLoadedServerMeta?: boolean;
   uploadingDiaryIds: Record<string, boolean>;
+  isInitialSyncing?: boolean;
+  isOffline?: boolean;
   onUploadDiaryToServer: (diary: DiaryEntry) => void;
   onSelectDiary: (diary: DiaryEntry) => void;
   onEditDiary: (diary: DiaryEntry) => void;
   onDeleteDiary: (diary: DiaryEntry) => void;
   onViewOnMap: (diary: DiaryEntry) => void;
   onOpenNewDiary: () => void;
-  onResetAllViews?: () => void;
-  onOpenVisitorModal?: () => void;
 }
 
 export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
   diaries,
   serverMetaMap,
+  hasLoadedServerMeta = false,
   uploadingDiaryIds,
+  isInitialSyncing = false,
+  isOffline = false,
   onUploadDiaryToServer,
   onSelectDiary,
   onEditDiary,
   onDeleteDiary,
   onViewOnMap,
   onOpenNewDiary,
-  onResetAllViews,
-  onOpenVisitorModal,
 }) => {
   const { t, language } = useLanguage();
-  const { isAdmin, openLoginModal } = useAuth();
+  const { canEditLocal } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRegion, setSelectedRegion] = useState<string>('ALL');
   const [selectedTag, setSelectedTag] = useState<string>('ALL');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [failedPhotoKeys, setFailedPhotoKeys] = useState<Record<string, boolean>>({});
 
   const allLabel = t('filterAll');
   const translationVersion = useTranslationVersion();
@@ -102,17 +124,13 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
     return ['ALL', ...Array.from(set)];
   }, [localizedDiaries]);
 
-  const totalViews = useMemo(() => {
-    return diaries.reduce((acc, d) => acc + (d.views || 0), 0);
-  }, [diaries]);
+  const { version: roadDistanceVersion, getSegmentDistance } = useRoadDistances(diaries);
 
-  // Pre-calculate distance difference from the previous diary in chronological order
+  // Pre-calculate real road distance difference from the previous diary in chronological order
   const distanceDiffs = useMemo(() => {
-    const sorted = [...diaries].sort(
-      (a, b) => new Date(`${a.date}T${a.time}`).getTime() - new Date(`${b.date}T${b.time}`).getTime()
-    );
+    const sorted = sortDiariesChronological(diaries);
 
-    const diffMap: Record<string, number | null> = {};
+    const diffMap: Record<string, { km: number; isRoad: boolean } | null> = {};
     for (let i = 0; i < sorted.length; i++) {
       const current = sorted[i];
       if (i === 0) {
@@ -124,19 +142,13 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
         current.location && prev.location &&
         typeof current.location.lat === 'number' && typeof prev.location.lat === 'number'
       ) {
-        const dist = calculateDistanceKm(
-          prev.location.lat,
-          prev.location.lng,
-          current.location.lat,
-          current.location.lng
-        );
-        diffMap[current.id] = dist;
+        diffMap[current.id] = getSegmentDistance(prev.location, current.location);
       } else {
         diffMap[current.id] = null;
       }
     }
     return diffMap;
-  }, [diaries]);
+  }, [diaries, roadDistanceVersion, getSegmentDistance]);
 
   // Filter & sort diaries (strictly newest travel date/time first by default)
   const filteredDiaries = useMemo(() => {
@@ -256,46 +268,6 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
             <span className="text-xs text-stone-500 whitespace-nowrap">
               {t('totalDiaries', { count: filteredDiaries.length })}
             </span>
-            {isAdmin && (
-              <>
-                <span className="text-stone-300">•</span>
-                <span 
-                  className="flex items-center gap-1.5 text-xs text-amber-800 font-medium whitespace-nowrap bg-amber-50/90 px-2.5 py-1 rounded-lg border border-amber-200/80 shadow-2xs"
-                  title={t('totalVisitorsReads')}
-                >
-                  <Eye className="w-3.5 h-3.5 text-amber-600" />
-                  <span className="hidden">{t('totalVisitorsReads')}: {totalViews.toLocaleString()}</span>
-                  
-                  {onOpenVisitorModal && (
-                    <button
-                      type="button"
-                      onClick={onOpenVisitorModal}
-                      className="ml-1 px-1.5 py-0.5 rounded bg-sky-100 hover:bg-sky-200 text-sky-800 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
-                      title="방문자 위치 지도 및 통계 보기"
-                    >
-                      <MapPin className="w-2.5 h-2.5 text-sky-600" />
-                      <span className="hidden">위치확인</span>
-                    </button>
-                  )}
-
-                  {onResetAllViews && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm('방문자 카운터를 모두 0으로 초기화하시겠습니까?')) {
-                          onResetAllViews();
-                        }
-                      }}
-                      className="ml-1 p-0.5 text-amber-600 hover:text-rose-600 hover:bg-amber-100/80 rounded transition cursor-pointer"
-                      title="방문자 수 0으로 초기화"
-                      aria-label="방문자 수 0으로 초기화"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                    </button>
-                  )}
-                </span>
-              </>
-            )}
           </div>
         </div>
 
@@ -350,9 +322,12 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {displayedDiaries.map((diary) => {
             const originalDiary = diaries.find((item) => item.id === diary.id) || diary;
-            const serverStatus = getDiaryServerStatus(originalDiary, serverMetaMap);
+            const serverStatus = getDiaryServerStatus(originalDiary, serverMetaMap, hasLoadedServerMeta);
             const isUploading = Boolean(uploadingDiaryIds[originalDiary.id]);
-            const coverPhoto = diary.photos.find((p) => p.isCover) || diary.photos[0];
+            const validPhotos = filterValidPhotos(diary.photos).filter(
+              (p) => !failedPhotoKeys[`${diary.id}:${p.id}`]
+            );
+            const coverPhoto = validPhotos.find((p) => p.isCover) || validPhotos[0];
             const WeatherIcon = weatherIcons[diary.weather]?.icon || Sun;
 
             return (
@@ -366,11 +341,15 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                     className="relative h-60 w-full overflow-hidden bg-stone-100 cursor-pointer"
                     onClick={() => onSelectDiary(diary)}
                   >
-                    <img
+                    <FeedCoverImage
                       src={coverPhoto.url}
                       alt={diary.title}
-                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-500"
-                      loading="lazy"
+                      onError={() =>
+                        setFailedPhotoKeys((prev) => ({
+                          ...prev,
+                          [`${diary.id}:${coverPhoto.id}`]: true,
+                        }))
+                      }
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-stone-950/60 via-transparent to-transparent opacity-80" />
 
@@ -430,29 +409,21 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         </span>
                         <span>•</span>
                         <span>{diary.time}</span>
-                        {isAdmin && (
-                          <>
-                            <span>•</span>
-                            <span 
-                              className="flex items-center gap-1 text-stone-600 font-medium bg-stone-100 px-2 py-0.5 rounded-full"
-                              title={t('diaryReadersCount', { count: (diary.views || 0).toLocaleString() })}
-                            >
-                              <Eye className="w-3.5 h-3.5 text-amber-600" />
-                              <span>{(diary.views || 0).toLocaleString()}</span>
-                            </span>
-                          </>
-                        )}
                         
-                        {/* Distance from Previous Diary (Requirement: Displayed to the right of visitors) */}
-                        {distanceDiffs[diary.id] !== null && distanceDiffs[diary.id]! > 0 && (
+                        {/* Distance from Previous Diary (real road distance when routable) */}
+                        {distanceDiffs[diary.id] !== null && distanceDiffs[diary.id]!.km > 0 && (
                           <>
                             <span>•</span>
                             <span 
                               className="flex items-center gap-1 text-stone-600 font-medium bg-stone-100 px-2 py-0.5 rounded-full"
-                              title={`이전 일기 위치로부터 ${distanceDiffs[diary.id]}km 이동`}
+                              title={
+                                distanceDiffs[diary.id]!.isRoad
+                                  ? `이전 일기 위치로부터 실제 도로 거리 ${distanceDiffs[diary.id]!.km}km`
+                                  : `이전 일기 위치로부터 직선 거리 ${distanceDiffs[diary.id]!.km}km`
+                              }
                             >
                               <Compass className="w-3.5 h-3.5 text-sky-600" />
-                              <span>{distanceDiffs[diary.id]}km</span>
+                              <span>{distanceDiffs[diary.id]!.km}km</span>
                             </span>
                           </>
                         )}
@@ -526,33 +497,37 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         <span>{t('cardViewOnMap')}</span>
                       </button>
 
-                      {/* Admin-only Actions: Edit & Delete */}
-                      {isAdmin && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onEditDiary(originalDiary);
-                            }}
-                            className="p-1.5 rounded transition text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-                            title={t('cardEdit')}
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
+                      {/* Local Actions: Edit & Delete (require app passcode or admin login) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onEditDiary(originalDiary);
+                        }}
+                        className={`p-1.5 rounded transition cursor-pointer ${
+                          canEditLocal
+                            ? 'text-stone-400 hover:text-stone-700 hover:bg-stone-100'
+                            : 'text-stone-300 hover:text-amber-700 hover:bg-amber-50'
+                        }`}
+                        title={canEditLocal ? t('cardEdit') : '수정 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteDiary(originalDiary);
-                            }}
-                            className="p-1.5 rounded transition text-stone-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
-                            title={t('cardDelete')}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteDiary(originalDiary);
+                        }}
+                        className={`p-1.5 rounded transition cursor-pointer ${
+                          canEditLocal
+                            ? 'text-stone-400 hover:text-rose-600 hover:bg-rose-50'
+                            : 'text-stone-300 hover:text-amber-700 hover:bg-amber-50'
+                        }`}
+                        title={canEditLocal ? t('cardDelete') : '삭제 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
 
                       {/* Server Status Button */}
                       <button
@@ -643,6 +618,18 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
           </div>
         )}
       </div>
+      ) : isInitialSyncing && diaries.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center max-w-lg mx-auto space-y-3 shadow-sm">
+          <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+            <Loader2 className="w-6 h-6 animate-spin" />
+          </div>
+          <h3 className="text-base font-bold text-stone-900">
+            서버에서 일기를 불러오는 중...
+          </h3>
+          <p className="text-xs text-stone-500">
+            Cloud SQL 서버에 저장된 기존 여행 일기를 자동으로 복원하고 있습니다.
+          </p>
+        </div>
       ) : (
         /* Empty State */
         <div className="bg-white rounded-2xl border border-dashed border-stone-300 p-12 text-center max-w-lg mx-auto space-y-4">
@@ -658,25 +645,14 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
             </p>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            {isAdmin ? (
-              <button
-                type="button"
-                onClick={onOpenNewDiary}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md transition cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>{t('btnNewDiaryFirst')}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => openLoginModal('새 일기 작성은 관리자만 가능합니다. 로그인해주세요.')}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-white text-xs font-semibold shadow-md transition cursor-pointer"
-              >
-                <Lock className="w-4 h-4" />
-                <span>관리자 로그인 후 작성</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onOpenNewDiary}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{t('btnNewDiaryFirst')}</span>
+            </button>
           </div>
         </div>
       )}

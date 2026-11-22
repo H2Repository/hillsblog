@@ -1,4 +1,69 @@
-import { DiaryEntry } from '../types';
+import { DiaryEntry, TravelPhoto } from '../types';
+
+/**
+ * Checks if a photo URL is non-empty and valid for rendering.
+ */
+export function isValidPhotoUrl(url: unknown): url is string {
+  if (typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return false;
+  if (trimmed.startsWith('blob:')) return false;
+  if (trimmed.startsWith('data:')) {
+    const commaIdx = trimmed.indexOf(',');
+    return trimmed.startsWith('data:image/') && commaIdx > 0 && trimmed.length > commaIdx + 10;
+  }
+  return true;
+}
+
+/**
+ * Returns only photos with valid, renderable URLs.
+ */
+export function filterValidPhotos(photos?: TravelPhoto[]): TravelPhoto[] {
+  if (!Array.isArray(photos)) return [];
+  return photos.filter((p) => Boolean(p && isValidPhotoUrl(p.url)));
+}
+
+/**
+ * Strips broken/empty photo entries from a diary while keeping accurate totalPhotosCount
+ * and hasSubcollectionPhotos flags so missing photos can be repaired from Firestore.
+ */
+export function sanitizeDiaryEntry(diary: DiaryEntry): { entry: DiaryEntry; strippedCount: number } {
+  const rawPhotos = Array.isArray(diary.photos) ? diary.photos : [];
+  const validPhotos = filterValidPhotos(rawPhotos);
+  const strippedCount = rawPhotos.length - validPhotos.length;
+
+  if (strippedCount === 0) {
+    return { entry: diary, strippedCount: 0 };
+  }
+
+  const totalPhotosCount = Math.max(diary.totalPhotosCount || 0, rawPhotos.length);
+  return {
+    entry: {
+      ...diary,
+      photos: validPhotos,
+      totalPhotosCount,
+      hasSubcollectionPhotos: Boolean(diary.hasSubcollectionPhotos || totalPhotosCount > validPhotos.length),
+    },
+    strippedCount,
+  };
+}
+
+/**
+ * Returns true if a diary has missing/empty photo URLs or fewer valid local photos
+ * than expected from Firestore subcollections.
+ */
+export function diaryNeedsPhotoHydration(diary: DiaryEntry): boolean {
+  if (!diary) return false;
+  const rawPhotos = Array.isArray(diary.photos) ? diary.photos : [];
+  if (rawPhotos.some((p) => !isValidPhotoUrl(p?.url) || Boolean(p?.isThumbnailOnly))) {
+    return true;
+  }
+  const expectedCount = typeof diary.totalPhotosCount === 'number' ? diary.totalPhotosCount : 0;
+  if (diary.hasSubcollectionPhotos && expectedCount > rawPhotos.length) {
+    return true;
+  }
+  return false;
+}
 
 const STORAGE_KEY = 'hills_blog_diaries_v2';
 
@@ -48,31 +113,42 @@ export function normalizeTitle(title?: string): string {
 /**
  * Checks whether two diaries represent the exact same entry:
  * - Identical ID
- * - OR same travel date (YYYY-MM-DD) and matching normalized title
+ * - OR exact same creation timestamp (within 2s) on the same date with the same normalized title
  */
 export function isDiaryDuplicate(a: DiaryEntry, b: DiaryEntry): boolean {
   if (!a || !b) return false;
-  // Primarily rely on unique IDs. 
-  // Title/Date matching is too aggressive and causes data loss if multiple entries share generic titles.
-  if (a.id && b.id) {
-    return a.id === b.id;
+  if (a.id && b.id && a.id === b.id) {
+    return true;
+  }
+  const titleA = normalizeTitle(a.title);
+  const titleB = normalizeTitle(b.title);
+  if (
+    titleA &&
+    titleA === titleB &&
+    a.date &&
+    a.date === b.date &&
+    a.createdAt &&
+    b.createdAt &&
+    Math.abs(a.createdAt - b.createdAt) <= 2000
+  ) {
+    return true;
   }
   return false;
 }
 
 /**
  * Picks the higher quality/updated diary when two duplicates are found,
- * merging best traits (max views, earliest createdAt, latest updatedAt, photos).
+ * merging best traits (earliest createdAt, latest updatedAt, photos).
  */
 export function pickBetterDiary(a: DiaryEntry, b: DiaryEntry): { winner: DiaryEntry; loser: DiaryEntry } {
   let scoreA = 0;
   let scoreB = 0;
 
-  // 1. Photos count (highest weight: 3) - updated versions typically carry more or equal photos
-  const photosA = a.photos?.length || 0;
-  const photosB = b.photos?.length || 0;
-  if (photosA > photosB) scoreA += 3;
-  else if (photosB > photosA) scoreB += 3;
+  // 1. Valid Photos count (highest weight: 3) - never let empty/broken photo stubs outrank real photos
+  const validA = filterValidPhotos(a.photos);
+  const validB = filterValidPhotos(b.photos);
+  if (validA.length > validB.length) scoreA += 3;
+  else if (validB.length > validA.length) scoreB += 3;
 
   // 2. Text content length (weight: 2) - revisions usually contain corrected typos or richer text
   const lenA = a.content?.trim().length || 0;
@@ -96,17 +172,28 @@ export function pickBetterDiary(a: DiaryEntry, b: DiaryEntry): { winner: DiaryEn
   const winnerBase = aWins ? a : b;
   const loser = aWins ? b : a;
 
-  // Prefer keeping the winner's photos, or fallback to whichever has more photos
-  const winnerPhotos = (winnerBase.photos && winnerBase.photos.length > 0)
-    ? winnerBase.photos
-    : (loser.photos || []);
+  const winnerValid = filterValidPhotos(winnerBase.photos);
+  const loserValid = filterValidPhotos(loser.photos);
+  const winnerPhotos = winnerValid.length >= loserValid.length ? winnerValid : loserValid;
+  const expectedCount = Math.max(
+    winnerBase.totalPhotosCount || 0,
+    loser.totalPhotosCount || 0,
+    winnerBase.photos?.length || 0,
+    loser.photos?.length || 0,
+    winnerPhotos.length
+  );
 
   const winner: DiaryEntry = {
     ...winnerBase,
-    views: Math.max(a.views || 0, b.views || 0),
     createdAt: Math.min(a.createdAt || Date.now(), b.createdAt || Date.now()),
     updatedAt: Math.max(a.updatedAt || 0, b.updatedAt || 0, Date.now()),
     photos: winnerPhotos,
+    totalPhotosCount: expectedCount,
+    hasSubcollectionPhotos: Boolean(
+      winnerBase.hasSubcollectionPhotos ||
+      loser.hasSubcollectionPhotos ||
+      expectedCount > winnerPhotos.length
+    ),
   };
 
   return { winner, loser };
@@ -152,7 +239,8 @@ export function getStoredDiaries(): DiaryEntry[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      const { deduplicated } = deduplicateDiaries(parsed);
+      const sanitized = parsed.map((d) => sanitizeDiaryEntry(d).entry);
+      const { deduplicated } = deduplicateDiaries(sanitized);
       return deduplicated;
     }
     return [];
@@ -165,18 +253,21 @@ export function getStoredDiaries(): DiaryEntry[] {
 export function saveDiaries(diaries: DiaryEntry[]): void {
   const hasIdb = typeof indexedDB !== 'undefined';
   if (hasIdb) {
-    // Full diaries & photos live in IndexedDB. Never let localStorage fill up iPhone's 5MB origin limit
-    // and starve auth session or Firestore sync metadata keys.
+    // Full diaries & photos live in IndexedDB. Keep localStorage fallback strictly lightweight text-only
+    // so main thread never stalls serializing images and iPhone's 5MB limit stays clear.
     try {
-      const lightweight = diaries.slice(0, 15).map((d) => ({
-        ...d,
-        photos: (d.photos || []).map((p) => ({
-          ...p,
-          url: p.url && p.url.startsWith('data:image/') && p.url.length > 60_000 ? '' : p.url,
-        })),
-      }));
+      const lightweight = diaries.slice(0, 15).map((d) => {
+        const allPhotos = Array.isArray(d.photos) ? d.photos : [];
+        const totalCount = Math.max(d.totalPhotosCount || 0, allPhotos.length);
+        return {
+          ...d,
+          photos: [],
+          totalPhotosCount: totalCount,
+          hasSubcollectionPhotos: Boolean(d.hasSubcollectionPhotos || totalCount > 0),
+        };
+      });
       const json = JSON.stringify(lightweight);
-      if (json.length <= 400_000) {
+      if (json.length <= 150_000) {
         localStorage.setItem(STORAGE_KEY, json);
       } else {
         localStorage.removeItem(STORAGE_KEY);
@@ -357,8 +448,13 @@ export async function exportDiariesWithOptions(
     return { count: 0, success: false, fileName };
   }
 
-  const jsonString = JSON.stringify(filtered, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+  const blobParts: BlobPart[] = ['[\n'];
+  for (let i = 0; i < filtered.length; i++) {
+    if (i > 0) blobParts.push(',\n');
+    blobParts.push(JSON.stringify(filtered[i], null, 2));
+  }
+  blobParts.push('\n]');
+  const blob = new Blob(blobParts, { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 
   const downloadAnchor = document.createElement('a');

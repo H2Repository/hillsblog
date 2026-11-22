@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import L from 'leaflet';
-import { DiaryEntry, VisitorLog } from '../types';
+import { DiaryEntry } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { useAuth } from '../context/AuthContext';
 import { getLocalizedDiary } from '../utils/translationService';
 import { useTranslationVersion } from '../utils/translationService';
-import { calculateDistanceKm, getCurrentGpsPosition, reverseGeocode } from '../utils/geo';
+import { getCurrentGpsPosition, reverseGeocode } from '../utils/geo';
+import { filterValidPhotos } from '../utils/storage';
+import { getCompactDisplayUrl, useDisplayImageUrl } from '../utils/imageDisplay';
+import { sortDiariesChronological, useRoadDistances } from '../services/roadDistanceService';
 import { 
   MapPin, 
   Navigation, 
@@ -14,28 +16,38 @@ import {
   Camera, 
   Route, 
   ChevronRight,
-  Eye, 
-  Loader2,
-  Users
+  Loader2
 } from 'lucide-react';
 
 interface TravelMapViewProps {
   diaries: DiaryEntry[];
   onSelectDiary: (diary: DiaryEntry) => void;
   selectedDiaryId?: string | null;
-  visitorLogs?: VisitorLog[];
-  onOpenVisitorModal?: () => void;
 }
+
+const MapSidebarThumb: React.FC<{ src: string; onError: () => void }> = ({ src, onError }) => {
+  const displayUrl = useDisplayImageUrl(src, 140, 0.7);
+  if (!displayUrl) {
+    return <div className="w-full h-full bg-stone-200 animate-pulse" />;
+  }
+  return (
+    <img
+      src={displayUrl}
+      alt=""
+      className="w-full h-full object-cover"
+      loading="lazy"
+      decoding="async"
+      onError={onError}
+    />
+  );
+};
 
 export const TravelMapView: React.FC<TravelMapViewProps> = ({
   diaries,
   onSelectDiary,
   selectedDiaryId,
-  visitorLogs = [],
-  onOpenVisitorModal,
 }) => {
   const { t, language } = useLanguage();
-  const { isAdmin } = useAuth();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<{ [id: string]: L.Marker }>({});
@@ -52,9 +64,7 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
 
   // Sort diaries chronologically for travel route
   const sortedDiaries = useMemo(() => {
-    return [...localizedDiaries].sort(
-      (a, b) => new Date(`${a.date}T${a.time}`).getTime() - new Date(`${b.date}T${b.time}`).getTime()
-    );
+    return sortDiariesChronological(localizedDiaries);
   }, [localizedDiaries]);
 
   // Reversed list for the side itinerary (newest first)
@@ -63,93 +73,13 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
   }, [sortedDiaries]);
 
   const [isLocating, setIsLocating] = useState(false);
+  const [failedPhotoKeys, setFailedPhotoKeys] = useState<Record<string, boolean>>({});
   const [locateError, setLocateError] = useState<string | null>(null);
-  const [totalDistance, setTotalDistance] = useState(0);
-  const [showVisitorMarkers, setShowVisitorMarkers] = useState(false);
-  const visitorMarkersRef = useRef<L.Marker[]>([]);
-
-  // Update visitor markers on map
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    // Clear old visitor markers
-    visitorMarkersRef.current.forEach((m) => m.remove());
-    visitorMarkersRef.current = [];
-
-    if (!showVisitorMarkers || !visitorLogs || visitorLogs.length === 0) return;
-
-    const visitorIcon = L.divIcon({
-      className: 'custom-visitor-map-marker',
-      html: `
-        <div style="
-          width: 26px;
-          height: 26px;
-          background: #0284c7;
-          border: 2px solid white;
-          border-radius: 50%;
-          box-shadow: 0 4px 10px rgba(2, 132, 199, 0.45);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 12px;
-          cursor: pointer;
-        ">
-          👁️
-        </div>
-      `,
-      iconSize: [26, 26],
-      iconAnchor: [13, 13],
-      popupAnchor: [0, -13],
-    });
-
-    visitorLogs.forEach((log) => {
-      const marker = L.marker([log.lat, log.lng], { icon: visitorIcon }).addTo(map);
-      const timeStr = new Date(log.timestamp).toLocaleString('ko-KR', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-      marker.bindPopup(`
-        <div style="font-family: sans-serif; font-size: 12px; min-width: 160px; line-height: 1.4;">
-          <b style="color: #0369a1;">📍 방문자: ${log.city || '알 수 없음'}, ${log.country || ''}</b><br/>
-          <span style="color: #57534e;">🕒 ${timeStr}</span><br/>
-          <span style="color: #44403c;">📖 ${log.diaryTitle || '홈 피드'}</span><br/>
-          <span style="color: #78716c; font-size: 10px;">📱 ${log.device} • IP: ${log.ipMasked || '***'}</span>
-        </div>
-      `);
-      visitorMarkersRef.current.push(marker);
-    });
-  }, [showVisitorMarkers, visitorLogs]);
-
-  // Calculate cumulative distance along chronological trail starting from the 10/23 bicycle shop visit entry
-  useEffect(() => {
-    const bikeShopIndex = sortedDiaries.findIndex(
-      (d) => (d.date && d.date.includes('10-23')) || 
-             (d.title && (d.title.includes('자전거') || d.title.includes('가게') || d.title.includes('가계') || d.title.includes('샵'))) ||
-             (d.content && (d.content.includes('자전거') || d.content.includes('가게') || d.content.includes('가계')))
-    );
-    const startIndex = bikeShopIndex !== -1 ? bikeShopIndex : 0;
-    const relevantDiaries = sortedDiaries.slice(startIndex);
-
-    // Filter only diaries where includeInDistance is not false (default: true)
-    const distanceDiaries = relevantDiaries.filter(
-      (d) => (d.location?.includeInDistance ?? d.includeInDistance ?? true) !== false
-    );
-
-    let dist = 0;
-    for (let i = 0; i < distanceDiaries.length - 1; i++) {
-      dist += calculateDistanceKm(
-        distanceDiaries[i].location.lat,
-        distanceDiaries[i].location.lng,
-        distanceDiaries[i + 1].location.lat,
-        distanceDiaries[i + 1].location.lng
-      );
-    }
-    setTotalDistance(Math.round(dist * 10) / 10);
-  }, [sortedDiaries]);
+  const {
+    cumulativeDistanceKm: totalDistance,
+    cumulativeHasRoadData,
+    isCalculatingRoadDistances,
+  } = useRoadDistances(diaries);
 
   // Initialize map
   useEffect(() => {
@@ -234,47 +164,47 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
 
     const latLngs: [number, number][] = [];
 
+    let isCancelled = false;
+
+    const createMarkerIcon = (index: number, isIncluded: boolean) => {
+      const badgeClass = isIncluded
+        ? 'bg-amber-600 border-white text-white shadow-md'
+        : 'bg-stone-600 border-stone-200 text-stone-100 shadow-md';
+      const arrowColor = isIncluded ? 'bg-amber-600' : 'bg-stone-600';
+
+      return L.divIcon({
+        className: 'custom-travel-pin',
+        html: `
+          <div class="relative flex flex-col items-center group cursor-pointer transition-transform duration-150 hover:scale-110">
+            <div class="min-w-[26px] h-[26px] px-1.5 rounded-full ${badgeClass} border-2 flex items-center justify-center text-[11px] font-extrabold leading-none tracking-tight">
+              ${!isIncluded ? '<span class="mr-0.5 text-[9px]">🚫</span>' : ''}${index + 1}
+            </div>
+            <div class="w-2 h-2 ${arrowColor} rotate-45 -mt-1 border-r border-b ${isIncluded ? 'border-white/90' : 'border-stone-200/90'}"></div>
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 31],
+        popupAnchor: [0, -30],
+      });
+    };
+
     sortedDiaries.forEach((diary, index) => {
       const { lat, lng } = diary.location;
       latLngs.push([lat, lng]);
 
       const isIncluded = (diary.location?.includeInDistance ?? diary.includeInDistance ?? true) !== false;
-      const coverPhoto = diary.photos.find(p => p.isCover) || diary.photos[0];
-      const pinColor = isIncluded ? 'bg-amber-600' : 'bg-stone-600';
-      const arrowColor = isIncluded ? 'bg-amber-600' : 'bg-stone-600';
-      const badgeBorder = isIncluded ? 'border-white' : 'border-stone-300';
-      const badgeBg = isIncluded ? 'bg-stone-900' : 'bg-stone-700';
+      const validPhotos = filterValidPhotos(diary.photos);
+      const coverPhoto = validPhotos.find(p => p.isCover) || validPhotos[0];
 
-      const photoHtml = coverPhoto
-        ? `<div class="w-10 h-10 rounded-full overflow-hidden border-2 ${isIncluded ? 'border-amber-400' : 'border-stone-400 opacity-90'} shadow-lg bg-stone-200">
-             <img src="${coverPhoto.url}" alt="" class="w-full h-full object-cover" />
-           </div>`
-        : `<div class="w-10 h-10 rounded-full ${pinColor} border-2 border-white shadow-lg flex items-center justify-center text-white font-bold text-xs">
-             ${index + 1}
-           </div>`;
+      const marker = L.marker([lat, lng], {
+        icon: createMarkerIcon(index, isIncluded),
+      }).addTo(map);
 
-      const customIcon = L.divIcon({
-        className: 'custom-travel-pin',
-        html: `
-          <div class="relative flex flex-col items-center group cursor-pointer transition-transform duration-200 hover:scale-115">
-            ${photoHtml}
-            <div class="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full ${badgeBg} border ${badgeBorder} text-white text-[10px] font-bold flex items-center justify-center shadow">
-              ${!isIncluded ? '<span class="mr-0.5 text-[9px]">🚫</span>' : ''}${index + 1}
-            </div>
-            <div class="w-2.5 h-2.5 ${arrowColor} rotate-45 -mt-1 shadow-sm"></div>
-          </div>
-        `,
-        iconSize: [40, 48],
-        iconAnchor: [20, 48],
-        popupAnchor: [0, -48],
-      });
-
-      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
-
-      // Popup content
+      // Lazy popup image: avoid injecting full-size base64 strings into every marker popup upfront
+      const popupImgId = `popup-img-${diary.id}`;
       const popupContent = `
         <div style="font-family: inherit; min-width: 200px; max-width: 260px;">
-          ${coverPhoto ? `<img src="${coverPhoto.url}" style="width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px;" />` : ''}
+          ${coverPhoto ? `<img id="${popupImgId}" src="" style="display: none; width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px;" />` : ''}
           <div style="font-size: 11px; color: ${isIncluded ? '#d97706' : '#78716c'}; font-weight: 600; margin-bottom: 2px;">
             ${index + 1} • ${diary.date}
           </div>
@@ -291,11 +221,6 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
             </span>
           </div>
           ` : ''}
-          ${isAdmin ? `
-          <div style="font-size: 11px; color: #b45309; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
-            👁️ ${(diary.views || 0).toLocaleString()} ${t('diaryViewLabel')}
-          </div>
-          ` : ''}
           <button id="popup-btn-${diary.id}" style="width: 100%; padding: 6px 12px; background: ${isIncluded ? '#d97706' : '#57534e'}; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
             ${t('mapRead')}
           </button>
@@ -308,6 +233,17 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
       });
 
       marker.on('popupopen', () => {
+        if (coverPhoto) {
+          const imgEl = document.getElementById(popupImgId) as HTMLImageElement | null;
+          if (imgEl) {
+            getCompactDisplayUrl(coverPhoto.url, 360, 0.74).then((url) => {
+              if (!isCancelled && imgEl && url) {
+                imgEl.src = url;
+                imgEl.style.display = 'block';
+              }
+            }).catch(() => {});
+          }
+        }
         const btn = document.getElementById(`popup-btn-${diary.id}`);
         if (btn) {
           btn.onclick = () => {
@@ -343,6 +279,10 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
       map.setView([latestDiary.location.lat, latestDiary.location.lng], 13);
       hasInitialFitRef.current = true;
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [sortedDiaries, onSelectDiary, t, diaries]);
 
   // Pan to selected diary if changed externally
@@ -426,7 +366,7 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
       <div className="relative flex-1 min-h-[340px] h-2/3 md:h-full w-full">
         <div ref={mapContainerRef} className="w-full h-full min-h-[340px] z-0" />
 
-        {/* Floating Quick Locate & Visitor Location Controls */}
+        {/* Floating Quick Locate Controls */}
         <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 items-end">
           <div className="flex items-center gap-1.5">
             <button
@@ -461,47 +401,22 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
               {locateError}
             </div>
           )}
-
-          {/* Admin Visitor Location Controls */}
-          {isAdmin && (
-            <div className="flex flex-col gap-1.5 items-end">
-              <button
-                id="btn-toggle-visitor-locations"
-                type="button"
-                onClick={() => setShowVisitorMarkers((prev) => !prev)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shadow-md border transition cursor-pointer active:scale-95 ${
-                  showVisitorMarkers
-                    ? 'bg-sky-600 text-white border-sky-500 shadow-sky-600/30 ring-2 ring-sky-400/50'
-                    : 'bg-white/95 hover:bg-white text-sky-800 border-stone-200'
-                }`}
-                title="방문자 접속 위치 마커 지도에 표시하기"
-              >
-                <Eye className="w-4 h-4 text-sky-400" />
-                <span>방문자 위치 {showVisitorMarkers ? '숨기기' : `지도 표시 (${visitorLogs.length})`}</span>
-              </button>
-
-              {onOpenVisitorModal && (
-                <button
-                  id="btn-open-visitor-modal"
-                  type="button"
-                  onClick={onOpenVisitorModal}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/95 hover:bg-sky-50 text-sky-900 text-xs font-semibold shadow-md border border-sky-200 transition cursor-pointer"
-                  title="방문자 위치 통계 상세 모달 열기"
-                >
-                  <Users className="w-3.5 h-3.5 text-sky-600" />
-                  <span>방문자 통계 상세</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Floating Route Summary Overlay on Map */}
         <div className="absolute top-3 sm:top-4 left-3 sm:left-4 z-10 bg-stone-900/90 text-white backdrop-blur-md px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-xl border border-stone-700/60 flex items-center gap-2.5 sm:gap-4 text-[11px] sm:text-xs max-w-[calc(100vw-1.5rem)]">
-          <div className="flex items-center gap-1.5">
+          <div
+            className="flex items-center gap-1.5"
+            title={cumulativeHasRoadData ? '실제 도로 거리 합산 (미연결 구간은 직선거리 반영)' : '경로 거리 계산 중'}
+          >
             <Route className="w-4 h-4 text-amber-400" />
             <span className="text-stone-400">{t('mapTotalDistance')}:</span>
-            <span className="font-bold text-amber-300">{totalDistance} km</span>
+            <span className="font-bold text-amber-300">{totalDistance.toLocaleString()} km</span>
+            {isCalculatingRoadDistances ? (
+              <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
+            ) : cumulativeHasRoadData ? (
+              <span className="text-[10px] text-stone-400 hidden sm:inline">실도로</span>
+            ) : null}
           </div>
           <div className="w-px h-3 bg-stone-700" />
           <div className="flex items-center gap-1.5">
@@ -540,7 +455,10 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
         {/* Scrollable list of stops */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
           {listDiaries.map((diary, index) => {
-            const coverPhoto = diary.photos.find(p => p.isCover) || diary.photos[0];
+            const validPhotos = filterValidPhotos(diary.photos).filter(
+              (p) => !failedPhotoKeys[`${diary.id}:${p.id}`]
+            );
+            const coverPhoto = validPhotos.find(p => p.isCover) || validPhotos[0];
             const originalDiary = diaries.find(item => item.id === diary.id) || diary;
             const sequenceNumber = sortedDiaries.length - index;
 
@@ -561,7 +479,15 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
                 {/* Photo Thumbnail */}
                 <div className="w-16 h-16 rounded-lg overflow-hidden bg-stone-100 shrink-0 border border-stone-200 relative">
                   {coverPhoto ? (
-                    <img src={coverPhoto.url} alt="" className="w-full h-full object-cover" />
+                    <MapSidebarThumb
+                      src={coverPhoto.url}
+                      onError={() =>
+                        setFailedPhotoKeys((prev) => ({
+                          ...prev,
+                          [`${diary.id}:${coverPhoto.id}`]: true,
+                        }))
+                      }
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-stone-400 text-xs">
                       No photo

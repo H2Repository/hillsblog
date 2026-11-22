@@ -8,6 +8,16 @@ import { AuthProvider } from './context/AuthContext';
 import { registerSW } from 'virtual:pwa-register';
 
 // Register service worker for full offline support
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+}
+
 registerSW({
   immediate: true,
   onRegisteredSW(_swUrl, registration) {

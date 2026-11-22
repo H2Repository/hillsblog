@@ -1,54 +1,70 @@
-import React, { useState } from 'react';
-import { 
-  X, 
-  ShieldCheck, 
-  Lock, 
-  Key, 
-  AlertCircle, 
-  CheckCircle2, 
-  Loader2, 
-  UserCheck 
+import React, { useEffect, useState } from 'react';
+import {
+  X,
+  ShieldCheck,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  UserCheck,
+  LogOut,
+  KeyRound,
+  Lock,
+  Eye,
+  EyeOff,
+  Clock,
+  MapPin,
 } from 'lucide-react';
-import { useAuth, ADMIN_EMAIL } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+
+const AUTO_DIARY_PRESET_MINUTES = [5, 10, 15, 30, 60, 120];
+
+function formatShortTime(ts: number | null): string {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export const LoginModal: React.FC = () => {
-  const { 
-    isLoginModalOpen, 
-    closeLoginModal, 
-    loginActionPrompt, 
-    loginWithGoogle, 
-    loginWithAdminPasscode,
+  const {
+    isLoginModalOpen,
+    loginModalTab,
+    setLoginModalTab,
+    closeLoginModal,
+    loginActionPrompt,
+    loginWithGoogle,
+    loginWithGoogleRedirect,
+    unlockLocalEditWithPassword,
+    lockLocalEdit,
+    isAdmin,
+    isLocalEditUnlocked,
+    canUseRedirectFallback,
     isLoading,
     currentUser,
-    logout
+    autoDiarySettings,
+    updateAutoDiarySettings,
+    logout,
   } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'passcode' | 'google'>('passcode');
-  const [passcode, setPasscode] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showRedirectFallback, setShowRedirectFallback] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [showPasscode, setShowPasscode] = useState(false);
+  const [passcodeError, setPasscodeError] = useState<string | null>(null);
+  const [returnToAdminAfterUnlock, setReturnToAdminAfterUnlock] = useState(false);
+
+  useEffect(() => {
+    if (isLoginModalOpen) {
+      setErrorMessage(null);
+      setShowRedirectFallback(false);
+      setPasscodeInput('');
+      setPasscodeError(null);
+      setShowPasscode(false);
+      setReturnToAdminAfterUnlock(false);
+    }
+  }, [isLoginModalOpen]);
 
   if (!isLoginModalOpen) return null;
-
-  const handlePasscodeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-    if (!passcode.trim()) {
-      setErrorMessage('비밀번호를 입력해주세요.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const res = await loginWithAdminPasscode(passcode);
-    setIsSubmitting(false);
-
-    if (!res.success) {
-      setErrorMessage(res.error || '로그인에 실패했습니다.');
-    } else {
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      setPasscode('');
-    }
-  };
 
   const handleGoogleLogin = async () => {
     setErrorMessage(null);
@@ -58,15 +74,177 @@ export const LoginModal: React.FC = () => {
 
     if (!res.success) {
       setErrorMessage(res.error || 'Google 로그인 중 오류가 발생했습니다.');
+      if (res.offerRedirectFallback) {
+        setShowRedirectFallback(true);
+      }
     }
   };
 
+  const handleRedirectLogin = async () => {
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    const res = await loginWithGoogleRedirect();
+    if (!res.success) {
+      setIsSubmitting(false);
+      setErrorMessage(res.error || '페이지 이동 로그인 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handlePasscodeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasscodeError(null);
+    const shouldReturnToAdmin = returnToAdminAfterUnlock;
+    const shouldKeepOpen = shouldReturnToAdmin || !loginActionPrompt;
+    const res = unlockLocalEditWithPassword(passcodeInput, {
+      enabled: false,
+      intervalMinutes: autoDiarySettings.intervalMinutes || 60,
+      keepModalOpen: shouldKeepOpen,
+    });
+    if (!res.success) {
+      setPasscodeError(res.error || '패스워드를 확인해 주세요.');
+    } else {
+      setPasscodeInput('');
+      if (shouldReturnToAdmin) {
+        setReturnToAdminAfterUnlock(false);
+        setLoginModalTab('admin');
+      }
+    }
+  };
+
+  const renderAutoDiaryControls = (isUnlocked: boolean) => {
+    const activeEnabled = isUnlocked ? autoDiarySettings.enabled : false;
+    const activeInterval = autoDiarySettings.intervalMinutes || 60;
+
+    const handleToggle = () => {
+      if (!isUnlocked) return;
+      updateAutoDiarySettings({ enabled: !autoDiarySettings.enabled });
+    };
+
+    const handleIntervalChange = (nextMinutes: number) => {
+      if (!activeEnabled) return;
+      const clamped = Math.max(1, Math.min(240, Math.round(nextMinutes || 60)));
+      updateAutoDiarySettings({ intervalMinutes: clamped });
+    };
+
+    return (
+      <div
+        className={`p-3.5 rounded-xl border space-y-3 text-left transition ${
+          isUnlocked
+            ? 'bg-stone-50 border-stone-200'
+            : 'bg-stone-100/80 border-stone-200/70 opacity-65'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-stone-800 flex-wrap">
+              <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeEnabled ? 'text-emerald-600' : 'text-stone-400'}`} />
+              <span>자동 위치 확인 · 자동 일기 작성</span>
+              {!isUnlocked && (
+                <span className="px-1.5 py-0.5 rounded bg-stone-200 text-stone-600 text-[10px] font-semibold">
+                  해제 후 사용 가능
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">
+              {isUnlocked
+                ? '설정된 시간 간격마다 현재 GPS 위치를 확인하여 이동 일기를 자동으로 로컬에 기록합니다.'
+                : '앱 사용 패스워드를 해제하면 자동 위치 확인 및 자동 일기 작성 토글을 활성화할 수 있습니다.'}
+            </p>
+          </div>
+          <button
+            id="btn-toggle-auto-diary"
+            type="button"
+            role="switch"
+            aria-checked={activeEnabled}
+            disabled={!isUnlocked}
+            onClick={handleToggle}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+              !isUnlocked
+                ? 'bg-stone-300 cursor-not-allowed opacity-60'
+                : activeEnabled
+                  ? 'bg-emerald-600 cursor-pointer'
+                  : 'bg-stone-300 cursor-pointer'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                activeEnabled ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="space-y-2 pt-2 border-t border-stone-200/80">
+          <div className={`space-y-2 transition-opacity ${activeEnabled ? 'opacity-100' : 'opacity-55'}`}>
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className={`font-semibold flex items-center gap-1 ${activeEnabled ? 'text-stone-700' : 'text-stone-400'}`}>
+                <Clock className={`w-3.5 h-3.5 ${activeEnabled ? 'text-amber-600' : 'text-stone-400'}`} />
+                확인 시간 간격
+              </span>
+              <div className="flex items-center gap-1">
+                <input
+                  id="input-auto-diary-interval"
+                  type="number"
+                  min={1}
+                  max={240}
+                  disabled={!activeEnabled}
+                  value={activeInterval}
+                  onChange={(e) => handleIntervalChange(Number(e.target.value))}
+                  className="w-[66px] px-2 py-1 rounded-lg border border-stone-300 bg-white text-center !text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/40 disabled:bg-stone-100 disabled:border-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed"
+                />
+                <span className={`font-semibold ${activeEnabled ? 'text-stone-600' : 'text-stone-400'}`}>분마다</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {AUTO_DIARY_PRESET_MINUTES.map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  disabled={!activeEnabled}
+                  onClick={() => handleIntervalChange(mins)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
+                    !activeEnabled
+                      ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed'
+                      : activeInterval === mins
+                        ? 'bg-amber-600 text-white border-amber-600 cursor-pointer'
+                        : 'bg-white text-stone-600 border-stone-300 hover:bg-stone-100 cursor-pointer'
+                  }`}
+                >
+                  {mins}분
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {isUnlocked && (
+            <div className="flex items-center justify-between text-[10px] text-stone-500 pt-1">
+              <span>
+                상태:{' '}
+                <strong className={autoDiarySettings.enabled ? 'text-emerald-700' : 'text-stone-600'}>
+                  {autoDiarySettings.enabled ? '자동 작성 켜짐' : '사용 안 함'}
+                </strong>
+              </span>
+              <span>
+                {autoDiarySettings.enabled
+                  ? `다음 기록 ${formatShortTime(autoDiarySettings.nextAutoDiaryAt)}`
+                  : autoDiarySettings.lastAutoDiaryAt
+                    ? `최근 ${formatShortTime(autoDiarySettings.lastAutoDiaryAt)}`
+                    : '대기 중'}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto"
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto"
       onClick={closeLoginModal}
     >
-      <div 
+      <div
         className="bg-white border border-stone-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col text-stone-900 my-auto max-h-[88dvh]"
         onClick={(e) => e.stopPropagation()}
       >
@@ -74,14 +252,20 @@ export const LoginModal: React.FC = () => {
         <div className="p-3.5 sm:p-5 bg-stone-900 text-stone-100 flex items-start justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-5 h-5" />
+              {!isLocalEditUnlocked || loginModalTab === 'local' ? (
+                <KeyRound className="w-5 h-5" />
+              ) : (
+                <ShieldCheck className="w-5 h-5" />
+              )}
             </div>
             <div className="min-w-0">
               <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2 truncate">
-                블로그 관리자 로그인
+                관리자 모드 로그온
               </h2>
               <p className="text-[10px] sm:text-xs text-stone-400 mt-0.5 leading-tight">
-                관리자 전용 기능을 위해 로그인해주세요.
+                {!isLocalEditUnlocked || loginModalTab === 'local'
+                  ? '앱 사용 패스워드로 로컬 편집 및 자동 위치 기록을 설정합니다.'
+                  : 'Cloud SQL 서버 동기화를 위해 블로그 관리자 Google 로그인을 진행합니다.'}
               </p>
             </div>
           </div>
@@ -89,15 +273,53 @@ export const LoginModal: React.FC = () => {
           <button
             type="button"
             onClick={closeLoginModal}
-            className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition shrink-0 ml-2"
+            className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition shrink-0 ml-2 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Action prompt if triggered by an action */}
+        {/* Mode Switcher Tabs (블로그 관리자 로그인 탭은 앱 사용 패스워드 해제 시에만 표시) */}
+        {isLocalEditUnlocked && (
+          <div className="px-4 pt-3 pb-2 bg-stone-100 border-b border-stone-200 flex gap-2 shrink-0">
+            <button
+              id="tab-auth-local-passcode"
+              type="button"
+              onClick={() => {
+                setLoginModalTab('local');
+                setPasscodeError(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                loginModalTab === 'local'
+                  ? 'bg-stone-900 text-amber-300 shadow-sm'
+                  : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>앱 사용 패스워드</span>
+            </button>
+            <button
+              id="tab-auth-google-admin"
+              type="button"
+              onClick={() => {
+                setLoginModalTab('admin');
+                setErrorMessage(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                loginModalTab === 'admin'
+                  ? 'bg-stone-900 text-emerald-300 shadow-sm'
+                  : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>블로그 관리자 로그인</span>
+            </button>
+          </div>
+        )}
+
+        {/* Action prompt */}
         {loginActionPrompt && (
-          <div className="px-4 sm:px-5 py-2.5 bg-amber-50 border-b border-amber-200/80 flex items-center gap-2 text-[11px] sm:text-xs text-amber-900">
+          <div className="px-4 sm:px-5 py-2.5 bg-amber-50 border-b border-amber-200/80 flex items-center gap-2 text-[11px] sm:text-xs text-amber-900 shrink-0">
             <AlertCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 shrink-0" />
             <span className="font-medium">{loginActionPrompt}</span>
           </div>
@@ -105,8 +327,145 @@ export const LoginModal: React.FC = () => {
 
         {/* Body */}
         <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
-          {currentUser ? (
-            /* Already logged in view */
+          {!isLocalEditUnlocked || loginModalTab === 'local' ? (
+            isLocalEditUnlocked ? (
+              <div className="space-y-4 text-center py-1">
+                <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-stone-900">
+                    {isAdmin ? '앱 패스워드 해제 · 블로그 관리자 로그인됨' : '앱 사용 패스워드가 해제되어 있습니다'}
+                  </h3>
+                  <p className="text-[11px] sm:text-xs text-stone-500 mt-1 leading-relaxed">
+                    {isAdmin
+                      ? '로컬 편집과 서버 동기화 모두 활성화되어 있으며, 아래에서 자동 위치 기록 설정을 조절할 수 있습니다.'
+                      : '로컬 일기 추가·수정·삭제가 가능하며, 2단계 블로그 관리자 로그인도 이용할 수 있습니다.'}
+                  </p>
+                </div>
+
+                {renderAutoDiaryControls(true)}
+
+                <div className="pt-1 space-y-2">
+                  <button
+                    type="button"
+                    onClick={closeLoginModal}
+                    className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition cursor-pointer"
+                  >
+                    설정 완료 (닫기)
+                  </button>
+                  {!currentUser && (
+                    <button
+                      type="button"
+                      onClick={() => setLoginModalTab('admin')}
+                      className="w-full py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-emerald-300 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>블로그 관리자 로그인으로 이동</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await lockLocalEdit();
+                      closeLoginModal();
+                    }}
+                    className="w-full py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-rose-500" />
+                    <span>{isAdmin ? '앱 편집 모드 잠그기 (관리자 로그아웃 포함)' : '앱 편집 모드 잠그기'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handlePasscodeSubmit} className="space-y-4 py-1">
+                <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-stone-700 text-[11px] sm:text-xs space-y-1.5">
+                  <p className="font-bold text-amber-950">1단계: 앱 사용 패스워드 해제</p>
+                  <p className="leading-relaxed text-stone-600">
+                    패스워드를 해제해야 로컬 일기 추가·수정·삭제 및 2단계 블로그 관리자(Google) 로그인을 사용할 수 있습니다.
+                  </p>
+                </div>
+
+                {passcodeError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] sm:text-xs text-rose-700 flex items-start gap-2 leading-relaxed">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                    <span>{passcodeError}</span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label htmlFor="input-app-passcode" className="block text-xs font-bold text-stone-700">
+                    앱 사용 패스워드
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="input-app-passcode"
+                      type={showPasscode ? 'text' : 'password'}
+                      value={passcodeInput}
+                      onChange={(e) => {
+                        setPasscodeInput(e.target.value);
+                        if (passcodeError) setPasscodeError(null);
+                      }}
+                      placeholder="패스워드를 입력하세요"
+                      autoFocus
+                      autoComplete="current-password"
+                      className="w-full pl-3.5 pr-10 py-2.5 rounded-xl border border-stone-300 bg-white text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasscode((prev) => !prev)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-700 transition cursor-pointer"
+                      aria-label={showPasscode ? '패스워드 숨기기' : '패스워드 보기'}
+                    >
+                      {showPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  id="btn-unlock-local-passcode"
+                  type="submit"
+                  className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 active:scale-98 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-sm shadow-amber-900/20 transition cursor-pointer"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  <span>
+                    {returnToAdminAfterUnlock
+                      ? '패스워드 해제 후 관리자 로그인으로 이동'
+                      : '패스워드로 추가·수정·삭제 허용'}
+                  </span>
+                </button>
+              </form>
+            )
+          ) : !isLocalEditUnlocked ? (
+            <div className="space-y-4 text-center py-2">
+              <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <span className="inline-block px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                  1단계 패스워드 해제 필요
+                </span>
+                <h3 className="text-sm font-bold text-stone-900">
+                  앱 사용 패스워드를 먼저 해제해 주세요
+                </h3>
+                <p className="text-[11px] sm:text-xs text-stone-500 leading-relaxed">
+                  블로그 관리자(Google) 로그인은 보안을 위해 1단계 앱 사용 패스워드를 해제한 상태에서만 활성화됩니다.
+                </p>
+              </div>
+              <button
+                id="btn-go-unlock-passcode-first"
+                type="button"
+                onClick={() => {
+                  setReturnToAdminAfterUnlock(true);
+                  setLoginModalTab('local');
+                }}
+                className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+              >
+                <KeyRound className="w-4 h-4" />
+                <span>1단계: 앱 사용 패스워드 입력하기</span>
+              </button>
+            </div>
+          ) : currentUser ? (
             <div className="space-y-4 text-center py-2">
               <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
                 <CheckCircle2 className="w-6 h-6" />
@@ -114,150 +473,80 @@ export const LoginModal: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-stone-900">현재 로그인되어 있습니다</h3>
                 <p className="text-[11px] sm:text-xs text-stone-500 mt-1 break-all">
-                  계정: <span className="font-semibold text-stone-800">{currentUser.email || currentUser.displayName}</span>
+                  인증 계정: <span className="font-semibold text-stone-800">{currentUser.displayName || '블로그 관리자'}</span>
                 </p>
                 <div className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[10px] sm:text-xs font-semibold">
                   <UserCheck className="w-3.5 h-3.5" />
-                  <span>관리자 권한 보유</span>
+                  <span>블로그 관리자 (서버 동기화 + 전체 권한)</span>
                 </div>
               </div>
               <div className="pt-2">
                 <button
                   type="button"
                   onClick={logout}
-                  className="w-full py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition active:scale-98"
+                  className="w-full py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  로그아웃
+                  <LogOut className="w-3.5 h-3.5 text-rose-500" />
+                  <span>블로그 관리자 로그아웃</span>
                 </button>
               </div>
             </div>
           ) : (
-            <>
-              {/* Tab Selector */}
-              <div className="flex rounded-xl bg-stone-100 p-1 text-[11px] sm:text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => { setActiveTab('passcode'); setErrorMessage(null); }}
-                  className={`flex-1 py-2 rounded-lg transition flex items-center justify-center gap-1.5 ${
-                    activeTab === 'passcode' 
-                      ? 'bg-white text-stone-900 font-bold shadow-sm' 
-                      : 'text-stone-500 hover:text-stone-800'
-                  }`}
-                >
-                  <Key className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span>비밀번호</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={true}
-                  className="flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-stone-300 cursor-not-allowed opacity-50"
-                >
-                  <svg className="w-3.5 h-3.5 opacity-60 shrink-0" viewBox="0 0 24 24">
+            <div className="space-y-4 py-1">
+              <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 text-stone-600 text-[11px] sm:text-xs space-y-1.5">
+                <p className="font-bold text-stone-800">2단계: 블로그 관리자 Google 계정 안내</p>
+                <p className="leading-relaxed">
+                  서버 DB(Cloud SQL) 보안 정책에 따라 등록된 블로그 관리자 Google 계정으로 인증하면 서버 동기화 및 모든 일기 관리 기능을 이용할 수 있습니다.
+                </p>
+              </div>
+
+              {errorMessage && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] sm:text-xs text-rose-700 flex items-start gap-2 leading-relaxed">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
+              <button
+                id="btn-google-signin"
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={isSubmitting || isLoading}
+                className="w-full py-3 px-4 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 active:scale-98 text-stone-800 text-xs sm:text-sm font-bold flex items-center justify-center gap-2.5 shadow-sm transition cursor-pointer disabled:opacity-50"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-amber-600" />
+                ) : (
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                     <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
-                  <span>Google</span>
+                )}
+                <span>{isSubmitting ? 'Google 로그인 중...' : 'Google 계정으로 로그인'}</span>
+              </button>
+
+              {canUseRedirectFallback && showRedirectFallback && (
+                <button
+                  type="button"
+                  onClick={handleRedirectLogin}
+                  disabled={isSubmitting || isLoading}
+                  className="w-full py-2.5 px-4 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                >
+                  <span>페이지 이동(리디렉션)으로 Google 로그인 시도</span>
                 </button>
-              </div>
-
-              {/* Tab 1: Passcode Form */}
-              {activeTab === 'passcode' && (
-                <form onSubmit={handlePasscodeSubmit} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] sm:text-xs font-semibold text-stone-700 flex items-center justify-between gap-2">
-                      <span className="shrink-0">관리자 비밀번호</span>
-                      <span className="text-[10px] text-stone-400 font-normal truncate min-w-0">계정: {ADMIN_EMAIL}</span>
-                    </label>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="password"
-                        value={passcode}
-                        onChange={(e) => setPasscode(e.target.value)}
-                        placeholder="비밀번호 입력"
-                        autoComplete="current-password"
-                        className="w-full pl-9 pr-3 py-2.5 text-base sm:text-xs rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  {errorMessage && (
-                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] sm:text-xs text-rose-700 flex items-center gap-2 animate-in slide-in-from-top-1">
-                      <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                      <span>{errorMessage}</span>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={isSubmitting || isLoading}
-                    className="w-full py-2.5 sm:py-3 rounded-xl bg-amber-600 hover:bg-amber-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-amber-900/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:active:scale-100"
-                  >
-                    {isSubmitting ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Key className="w-4 h-4" />
-                    )}
-                    <span>관리자 로그인</span>
-                  </button>
-                </form>
               )}
-
-              {/* Tab 2: Google Sign-In (Disabled) */}
-              {activeTab === 'google' && (
-                <div className="space-y-4 py-1">
-                  <div className="p-3 rounded-xl bg-stone-100 border border-stone-200 text-stone-600 text-[11px] sm:text-xs space-y-1.5">
-                    <div className="flex items-center gap-1.5 font-bold text-stone-800">
-                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>Google 로그인이 비활성화되었습니다</span>
-                    </div>
-                    <p className="text-[10px] sm:text-[11px] text-stone-500 leading-relaxed">
-                      현재 구글 로그인은 비활성화 정책에 따라 사용하실 수 없습니다. 블로그 관리 기능을 이용하시려면 <strong>관리자 비밀번호</strong>로 로그인해주세요.
-                    </p>
-                  </div>
-
-                  {errorMessage && (
-                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] sm:text-xs text-rose-700 flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                      <span>{errorMessage}</span>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    disabled={true}
-                    className="w-full py-2.5 px-4 rounded-xl border border-stone-200 bg-stone-100 text-stone-400 text-xs font-semibold flex items-center justify-center gap-2.5 shadow-none cursor-not-allowed select-none pointer-events-none opacity-60"
-                  >
-                    <svg className="w-4 h-4 opacity-50 grayscale" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                    </svg>
-                    <span>Google 로그인</span>
-                  </button>
-
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => { setActiveTab('passcode'); setErrorMessage(null); }}
-                      className="w-full py-2 px-3 text-[11px] sm:text-xs text-amber-700 hover:text-amber-800 font-semibold text-center hover:underline cursor-pointer"
-                    >
-                      ← 관리자 비밀번호 입력으로 이동
-                    </button>
-                  </div>
-                </div>
-              )}
-            </>
+            </div>
           )}
         </div>
 
         {/* Footer info */}
         <div className="px-5 sm:px-6 py-3 bg-stone-50 border-t border-stone-200 text-[10px] sm:text-[11px] text-stone-500 flex items-center justify-between shrink-0">
-          <span className="truncate mr-2">방문자 모드: 코스 검색 및 지도 탐색 가능</span>
-          <span className="text-amber-700 font-bold shrink-0">관리자 전용</span>
+          <span className="truncate mr-2">방문자 모드: 인증 없이 일기 열람 및 지도 탐색 가능</span>
+          <span className="text-amber-700 font-bold shrink-0">
+            {!isLocalEditUnlocked || loginModalTab === 'local' ? '로컬 편집용' : '서버 관리자용'}
+          </span>
         </div>
       </div>
     </div>

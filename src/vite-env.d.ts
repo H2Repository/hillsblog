@@ -2,3 +2,6 @@
 /// <reference types="vite-plugin-pwa/client" />
 
 declare const __APP_VERSION__: string;
+declare const __APP_BUILD_TIME__: string;
+declare const __APP_BUILD_ID__: string;
+declare const __IS_PROD_BUILD__: boolean;
