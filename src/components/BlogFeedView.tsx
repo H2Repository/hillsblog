@@ -497,37 +497,33 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         <span>{t('cardViewOnMap')}</span>
                       </button>
 
-                      {/* Local Actions: Edit & Delete (require app passcode or admin login) */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onEditDiary(originalDiary);
-                        }}
-                        className={`p-1.5 rounded transition cursor-pointer ${
-                          canEditLocal
-                            ? 'text-stone-400 hover:text-stone-700 hover:bg-stone-100'
-                            : 'text-stone-300 hover:text-amber-700 hover:bg-amber-50'
-                        }`}
-                        title={canEditLocal ? t('cardEdit') : '수정 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
+                      {/* Local Actions: Edit & Delete (only shown when app passcode permission is unlocked) */}
+                      {canEditLocal && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onEditDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition cursor-pointer text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                            title={t('cardEdit')}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
 
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteDiary(originalDiary);
-                        }}
-                        className={`p-1.5 rounded transition cursor-pointer ${
-                          canEditLocal
-                            ? 'text-stone-400 hover:text-rose-600 hover:bg-rose-50'
-                            : 'text-stone-300 hover:text-amber-700 hover:bg-amber-50'
-                        }`}
-                        title={canEditLocal ? t('cardDelete') : '삭제 (앱 사용 패스워드 또는 관리자 로그인 필요)'}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteDiary(originalDiary);
+                            }}
+                            className="p-1.5 rounded transition cursor-pointer text-stone-400 hover:text-rose-600 hover:bg-rose-50"
+                            title={t('cardDelete')}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
 
                       {/* Server Status Button */}
                       <button
