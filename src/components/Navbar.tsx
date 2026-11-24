@@ -137,9 +137,9 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-stone-900/95 text-stone-100 backdrop-blur-md border-b border-stone-800 shadow-md">
-      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
         {/* Top Bar: Logo, Language, Actions */}
-        <div className="flex items-center justify-between h-16 sm:h-18 gap-1.5">
+        <div className="flex items-center justify-between h-12 sm:h-14 gap-1.5">
           {/* Logo & Blog Identity */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden shadow-lg shrink-0 border flex items-center justify-center relative transition-all ${
@@ -618,7 +618,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* View Switcher Sub-bar */}
-        <div className="flex items-center justify-between pb-3 pt-1 border-t border-stone-800/60 overflow-x-auto gap-2">
+        <div className="flex items-center justify-between pb-1.5 pt-1 border-t border-stone-800/60 overflow-x-auto gap-2">
           <nav className="flex items-center gap-1 sm:gap-2">
             <button
               id="nav-view-blog"

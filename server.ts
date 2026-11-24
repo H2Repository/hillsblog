@@ -331,10 +331,12 @@ async function startServer() {
           next();
           return;
         }
-        const patchedCode = result.code.replace(
-          'transport.connect(createHMRHandler(handleMessage));',
-          '/* HMR WebSocket disabled in dev middleware */'
-        );
+        const patchedCode = result.code
+          .replace(
+            'transport.connect(createHMRHandler(handleMessage));',
+            '/* HMR WebSocket disabled in dev middleware */'
+          )
+          .replace(/throw new Error\(["']send was called before connect["']\);/g, 'return;');
         res.setHeader('Content-Type', 'application/javascript');
         res.setHeader('Cache-Control', 'no-cache');
         res.send(patchedCode);

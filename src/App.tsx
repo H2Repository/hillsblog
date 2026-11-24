@@ -1351,7 +1351,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col flex-1 bg-stone-100 text-stone-900 font-sans selection:bg-amber-200 selection:text-amber-900 overflow-x-hidden pt-24">
+    <div className="flex flex-col flex-1 bg-stone-100 text-stone-900 font-sans selection:bg-amber-200 selection:text-amber-900 overflow-x-hidden pt-[90px] sm:pt-[100px]">
       <Navbar
         viewMode={viewMode}
         onViewModeChange={setViewMode}
@@ -1367,31 +1367,28 @@ export default function App() {
         isAutoDiaryRunning={isAutoDiaryRunning}
       />
 
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-3 lg:px-4 py-3 sm:py-4">
         {viewMode !== 'map' && (
-          <div className="mb-6 rounded-2xl bg-gradient-to-r from-stone-900 via-stone-800 to-amber-950 text-white p-4 sm:p-5 shadow-xl relative overflow-hidden border border-stone-800 shrink-0">
+          <div className="mb-3 rounded-2xl bg-gradient-to-r from-stone-900 via-stone-800 to-amber-950 text-white px-4 py-2 sm:px-5 sm:py-2.5 shadow-xl relative overflow-hidden border border-stone-800 shrink-0">
             <div className="absolute -right-12 -top-12 w-64 h-64 rounded-full bg-amber-600/10 blur-3xl pointer-events-none" />
-            <div className="relative z-10 w-full flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="relative z-10 w-full flex flex-col md:flex-row items-start md:items-center justify-between gap-2 sm:gap-3">
               <div className="flex-1">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-semibold mb-2 shadow-2xs">
+                <div className="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-semibold mb-1 shadow-2xs">
                   <Compass className="w-3.5 h-3.5" />
                   <span>{t('heroTag')}</span>
                 </div>
-                <p className="text-xs sm:text-sm text-stone-300 leading-relaxed max-w-2xl">{t('heroDescription')}</p>
+                <p className="text-xs sm:text-sm text-stone-300 leading-snug max-w-2xl">{t('heroDescription')}</p>
               </div>
               <div
-                className="flex items-center gap-3.5 bg-stone-900/90 backdrop-blur-md px-5 py-3 rounded-xl border border-white/15 shadow-xl shrink-0 w-full md:w-auto"
+                className="flex items-center gap-3.5 bg-stone-900/90 backdrop-blur-md px-4 py-1.5 sm:py-2 rounded-xl border border-white/15 shadow-xl shrink-0 w-full md:w-auto"
                 title={cumulativeHasRoadData ? '실제 도로 거리 기준 누적 총 주행 거리' : '누적 총 주행 거리'}
               >
-                <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30"><Route className="w-5 h-5" /></div>
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30"><Route className="w-5 h-5" /></div>
                 <div className="flex-1 md:flex-initial">
                   <div className="text-[11px] text-stone-400 font-medium uppercase tracking-wider">{t('totalCumulativeDistance')}</div>
                   <div className="text-lg sm:text-xl font-extrabold text-white flex items-baseline gap-1.5">
                     <span>{cumulativeDistanceKm.toLocaleString()}</span>
                     <span className="text-xs font-bold text-amber-400">km</span>
-                    {cumulativeHasRoadData && (
-                      <span className="text-[10px] font-medium text-stone-400">실도로</span>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1426,7 +1423,7 @@ export default function App() {
       </main>
 
       <footer className="shrink-0 bg-stone-900 text-stone-300 border-t border-stone-800 py-3 sm:py-3.5 shadow-md mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3 text-xs">
+        <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4 flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 min-w-0">
             <span className="font-bold text-white tracking-tight truncate">{t('appTitle')}</span>
             <span className="hidden sm:inline text-stone-600">•</span>

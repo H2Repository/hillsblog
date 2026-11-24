@@ -134,7 +134,7 @@ export default defineConfig(({ command }) => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),

@@ -218,9 +218,9 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* Blog Feed Search & Filter Bar */}
-      <div className="bg-white rounded-xl p-3 border border-stone-200/90 shadow-sm space-y-2">
+      <div className="bg-white rounded-xl px-3 py-1.5 border border-stone-200/90 shadow-sm space-y-1.5">
         <div className="flex flex-col sm:flex-row items-center gap-2">
           {/* Search Input */}
           <div className="relative flex-1 w-full">

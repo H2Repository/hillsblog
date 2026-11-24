@@ -13,8 +13,6 @@ import {
   Navigation, 
   Layers, 
   Calendar, 
-  Camera, 
-  Route, 
   ChevronRight,
   Loader2
 } from 'lucide-react';
@@ -363,20 +361,20 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
   return (
     <div className="relative w-full h-[calc(100vh-140px)] min-h-[550px] bg-stone-100 flex flex-col md:flex-row overflow-hidden rounded-2xl border border-stone-300/80 shadow-lg">
       {/* Map Container */}
-      <div className="relative flex-1 min-h-[340px] h-2/3 md:h-full w-full">
-        <div ref={mapContainerRef} className="w-full h-full min-h-[340px] z-0" />
+      <div className="relative flex-1 min-h-[280px] h-[56%] md:h-full w-full">
+        <div ref={mapContainerRef} className="w-full h-full min-h-[280px] z-0" />
 
         {/* Floating Quick Locate Controls */}
-        <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 items-end">
+        <div className="absolute top-1 right-2.5 z-10 flex flex-col gap-1.5 items-end">
           <div className="flex items-center gap-1.5">
             <button
               id="btn-fit-all-route"
               type="button"
               onClick={handleFitAllRoute}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/95 hover:bg-white text-stone-800 text-xs font-semibold shadow-md hover:shadow-lg border border-stone-200 transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/95 hover:bg-white text-stone-800 text-[11px] font-semibold shadow-md hover:shadow-lg border border-stone-200 transition active:scale-95 cursor-pointer leading-tight"
               title="전체 여행 경로 한눈에 보기"
             >
-              <Layers className="w-4 h-4 text-amber-600" />
+              <Layers className="w-3.5 h-3.5 text-amber-600" />
               <span>전체 경로</span>
             </button>
 
@@ -385,12 +383,12 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
               type="button"
               onClick={handleLocateMe}
               disabled={isLocating}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/95 hover:bg-white text-stone-800 text-xs font-semibold shadow-md hover:shadow-lg border border-stone-200 transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/95 hover:bg-white text-stone-800 text-[11px] font-semibold shadow-md hover:shadow-lg border border-stone-200 transition active:scale-95 cursor-pointer leading-tight"
             >
               {isLocating ? (
-                <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
               ) : (
-                <Navigation className="w-4 h-4 text-emerald-600" />
+                <Navigation className="w-3.5 h-3.5 text-emerald-600" />
               )}
               <span>{t('mapRealtimeLocation')}</span>
             </button>
@@ -402,54 +400,44 @@ export const TravelMapView: React.FC<TravelMapViewProps> = ({
             </div>
           )}
         </div>
-
-        {/* Floating Route Summary Overlay on Map */}
-        <div className="absolute top-3 sm:top-4 left-3 sm:left-4 z-10 bg-stone-900/90 text-white backdrop-blur-md px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-xl border border-stone-700/60 flex items-center gap-2.5 sm:gap-4 text-[11px] sm:text-xs max-w-[calc(100vw-1.5rem)]">
-          <div
-            className="flex items-center gap-1.5"
-            title={cumulativeHasRoadData ? '실제 도로 거리 합산 (미연결 구간은 직선거리 반영)' : '경로 거리 계산 중'}
-          >
-            <Route className="w-4 h-4 text-amber-400" />
-            <span className="text-stone-400">{t('mapTotalDistance')}:</span>
-            <span className="font-bold text-amber-300">{totalDistance.toLocaleString()} km</span>
-            {isCalculatingRoadDistances ? (
-              <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
-            ) : cumulativeHasRoadData ? (
-              <span className="text-[10px] text-stone-400 hidden sm:inline">실도로</span>
-            ) : null}
-          </div>
-          <div className="w-px h-3 bg-stone-700" />
-          <div className="flex items-center gap-1.5">
-            <MapPin className="w-4 h-4 text-amber-400" />
-            <span className="text-stone-400">{t('mapVisitedPlaces')}:</span>
-            <span className="font-bold text-white">{sortedDiaries.length}</span>
-          </div>
-          <div className="w-px h-3 bg-stone-700" />
-          <div className="flex items-center gap-1.5 hidden sm:flex">
-            <Camera className="w-4 h-4 text-amber-400" />
-            <span className="text-stone-400">{t('mapPhotosCount')}:</span>
-            <span className="font-bold text-white">
-              {sortedDiaries.reduce((sum, d) => sum + Math.max(d.totalPhotosCount || 0, d.photos?.length || 0), 0)}
-            </span>
-          </div>
-        </div>
       </div>
 
-      {/* Side Travel Log Footprint Itinerary (발자취 경로순서 - 원복, 단 검은색 바탕의 하단 일기 프리뷰는 완전 삭제) */}
-      <div className="w-full md:w-88 lg:w-96 h-1/3 md:h-full bg-white border-t md:border-t-0 md:border-l border-stone-200 flex flex-col z-10 shadow-lg">
-        <div className="p-4 border-b border-stone-100 bg-stone-50/70 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-xs">
-              👣
+      {/* Side Travel Log Footprint Itinerary */}
+      <div className="w-full md:w-88 lg:w-96 h-[42%] md:h-full bg-white border-t md:border-t-0 md:border-l border-stone-200 flex flex-col z-10 shadow-lg">
+        <div className="p-2.5 sm:p-3 border-b border-stone-200/80 bg-stone-50/70 shrink-0">
+          <div className="rounded-xl border border-stone-200 bg-white px-2.5 sm:px-3 py-2 shadow-2xs flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+              <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-xs shrink-0">
+                👣
+              </div>
+              <div className="min-w-0 leading-tight space-y-0.5">
+                <h3 className="text-xs sm:text-sm font-bold text-stone-900 truncate">{t('mapTrailOrder')}</h3>
+                <p className="text-[10px] sm:text-[11px] text-stone-500 truncate">{t('mapTrailSubtitle')}</p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-sm font-bold text-stone-900">{t('mapTrailOrder')}</h3>
-              <p className="text-[11px] text-stone-500">{t('mapTrailSubtitle')}</p>
+
+            <div
+              className="rounded-lg bg-amber-100 border border-amber-300/90 text-black px-3 py-1.5 min-w-[164px] sm:min-w-[180px] space-y-0.5 text-[11px] shrink-0 leading-tight shadow-2xs"
+              title={cumulativeHasRoadData ? '실제 도로 거리 합산 (미연결 구간은 직선거리 반영)' : '경로 거리 계산 중'}
+            >
+              <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+                <span className="font-medium text-black">{t('mapTotalDistance')}</span>
+                <span className="font-bold text-black text-right tabular-nums flex items-center justify-end gap-1">
+                  <span>{totalDistance.toLocaleString()}km</span>
+                  {isCalculatingRoadDistances && (
+                    <Loader2 className="w-3 h-3 animate-spin text-black" />
+                  )}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+                <span className="font-medium text-black">{t('mapVisitedPlaces')}</span>
+                <span className="font-bold text-black text-right tabular-nums">
+                  {sortedDiaries.length}
+                </span>
+              </div>
             </div>
           </div>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">
-            {sortedDiaries.length} Stops
-          </span>
         </div>
 
         {/* Scrollable list of stops */}
