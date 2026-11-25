@@ -317,6 +317,7 @@ async function startServer() {
   if (isDevServer) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      base: '/',
       server: {
         middlewareMode: true,
         hmr: false,
@@ -346,6 +347,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    app.use('/hillsblog', express.static(distDir));
     app.use(express.static(distDir));
     app.get('*', (req, res) => {
       if (req.path.startsWith('/api/')) {

@@ -45,7 +45,7 @@ export default defineConfig(({ command }) => {
   const { appVersion, buildTime, buildId, isProdBuild } = resolveAppBuildMeta(command);
 
   return {
-    base: '/',
+    base: '/hillsblog/',
     define: {
       __APP_VERSION__: JSON.stringify(appVersion),
       __APP_BUILD_TIME__: JSON.stringify(buildTime),
