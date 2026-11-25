@@ -14,11 +14,11 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const LEGACY_ACTIVITY_STORAGE_KEY = 'hills_blog_last_activity';
 const VERIFIED_ADMIN_UID_KEY = 'hills_blog_verified_admin_uid';
 const PENDING_REDIRECT_KEY = 'hills_blog_pending_redirect';
-const LOCAL_EDIT_UNLOCKED_KEY = 'hills_blog_local_edit_unlocked_v1';
+const LOCAL_EDIT_UNLOCKED_KEY = 'hills_blog_local_edit_unlocked_v3';
 const AUTO_DIARY_SETTINGS_KEY = 'hills_blog_auto_diary_settings_v3';
 const LEGACY_AUTO_DIARY_SETTINGS_KEY = 'hills_blog_auto_diary_settings_v2';
 const DEFAULT_AUTO_DIARY_INTERVAL_MINUTES = 60;
-const LOCAL_EDIT_PASSCODE_SHA256 = '231f265ba1540470cef3c5c0f122f5921db2eadf9a658a3c7ef27e76ac7bc30b';
+const LOCAL_EDIT_PASSCODE_SHA256 = '59a9722d8cf18d41942c717fef4eb5cd9e53fe188e5c860e4414c585aab93809';
 
 export type LoginModalTab = 'local' | 'admin';
 
