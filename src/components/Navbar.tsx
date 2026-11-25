@@ -222,40 +222,40 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Action Buttons: New Diary & Hamburger Menu */}
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            {/* New Diary Write Button */}
-            <button
-              id="btn-new-diary-modal"
-              type="button"
-              onClick={onOpenNewDiary}
-              className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold shadow-md active:scale-95 transition-all duration-150 cursor-pointer ${
-                isStatusAlert
-                  ? 'bg-rose-700 hover:bg-rose-600 text-white shadow-rose-950/50 ring-1 ring-rose-500/80'
-                  : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/40'
-              }`}
-              title={
-                !canEditLocal
-                  ? '새 일기 쓰기 (앱 사용 패스워드 또는 관리자 로그인 필요)'
-                  : isOffline
+            {/* New Diary Write Button (only shown when app usage mode or blog admin is logged in) */}
+            {(canEditLocal || isAdmin) && (
+              <button
+                id="btn-new-diary-modal"
+                type="button"
+                onClick={onOpenNewDiary}
+                className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold shadow-md active:scale-95 transition-all duration-150 cursor-pointer ${
+                  isStatusAlert
+                    ? 'bg-rose-700 hover:bg-rose-600 text-white shadow-rose-950/50 ring-1 ring-rose-500/80'
+                    : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/40'
+                }`}
+                title={
+                  isOffline
                     ? 'Off Mode (오프라인 로컬 일기 등록 가능)'
                     : isQuotaExceeded
                       ? '일일 무료 할당량 초과 (로컬 일기 작성 가능)'
                       : '새 일기 쓰기 (로컬 저장 후 서버 동기화 가능)'
-              }
-            >
-              {isOffline ? (
-                <WifiOff className="w-4 h-4 text-rose-200" />
-              ) : (
-                <Plus className={`w-4 h-4 ${isQuotaExceeded ? 'text-rose-200' : 'text-white'}`} />
-              )}
-              <span className="hidden sm:inline">
-                일기 쓰기
-              </span>
-              {isOffline && (
-                <span className="sm:hidden px-1 rounded text-[9px] font-bold bg-white text-rose-700">
-                  OFF
+                }
+              >
+                {isOffline ? (
+                  <WifiOff className="w-4 h-4 text-rose-200" />
+                ) : (
+                  <Plus className={`w-4 h-4 ${isQuotaExceeded ? 'text-rose-200' : 'text-white'}`} />
+                )}
+                <span className="hidden sm:inline">
+                  일기 쓰기
                 </span>
-              )}
-            </button>
+                {isOffline && (
+                  <span className="sm:hidden px-1 rounded text-[9px] font-bold bg-white text-rose-700">
+                    OFF
+                  </span>
+                )}
+              </button>
+            )}
 
             {/* Hamburger Menu Area */}
             <div className="relative" ref={menuRef}>
