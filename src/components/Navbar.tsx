@@ -577,31 +577,33 @@ export const Navbar: React.FC<NavbarProps> = ({
                     )}
                   </div>
 
-                  {/* 2. Menu Action Items List */}
-                  <div className="space-y-1">
-                    {/* 데이터 관리 (백업 및 가져오기) */}
-                    <button
-                      id="btn-menu-export-backup"
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onExportData();
-                      }}
-                      className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-stone-800 text-left transition group cursor-pointer border border-transparent hover:border-stone-700"
-                    >
-                      <div className="w-7 h-7 rounded-lg bg-stone-800 group-hover:bg-amber-600/20 flex items-center justify-center text-amber-400 border border-stone-700 group-hover:border-amber-500/40 transition shrink-0">
-                        <Database className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white group-hover:text-amber-300 transition">
-                          데이터 관리 (백업 및 가져오기)
-                        </p>
-                        <p className="text-[10px] text-stone-400 truncate">
-                          전체 백업 다운로드 / JSON 파일 가져오기
-                        </p>
-                      </div>
-                    </button>
-                  </div>
+                  {/* 2. Menu Action Items List (앱사용 관리자 / 블로그 관리자 전용) */}
+                  {(canEditLocal || isAdmin) && (
+                    <div className="space-y-1">
+                      {/* 데이터 관리 (백업 및 가져오기) */}
+                      <button
+                        id="btn-menu-export-backup"
+                        type="button"
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          onExportData();
+                        }}
+                        className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-stone-800 text-left transition group cursor-pointer border border-transparent hover:border-stone-700"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-stone-800 group-hover:bg-amber-600/20 flex items-center justify-center text-amber-400 border border-stone-700 group-hover:border-amber-500/40 transition shrink-0">
+                          <Database className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-white group-hover:text-amber-300 transition">
+                            데이터 관리 (백업 및 가져오기)
+                          </p>
+                          <p className="text-[10px] text-stone-400 truncate">
+                            전체 백업 다운로드 / JSON 파일 가져오기
+                          </p>
+                        </div>
+                      </button>
+                    </div>
+                  )}
 
                   {/* 앱 버전 정보 */}
                   <div className="mt-1.5 pt-1.5 border-t border-stone-800 flex items-center justify-between gap-2 px-1 text-[10px] text-stone-400 whitespace-nowrap">

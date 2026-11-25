@@ -1356,7 +1356,11 @@ export default function App() {
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         onOpenNewDiary={handleRequestNewDiary}
-        onExportData={() => setIsExportModalOpen(true)}
+        onExportData={() => {
+          if (canEditLocal || isAdmin) {
+            setIsExportModalOpen(true);
+          }
+        }}
         totalDiariesCount={diaries.length}
         serverDiariesCount={serverDiariesCount}
         isServerOnline={isServerOnline}
@@ -1481,7 +1485,7 @@ export default function App() {
         onClose={() => setDeleteTarget(null)}
       />
       <DataManagementModal 
-        isOpen={isExportModalOpen} 
+        isOpen={isExportModalOpen && (canEditLocal || isAdmin)} 
         onClose={() => setIsExportModalOpen(false)} 
         diaries={diaries} 
         unsyncedCount={
