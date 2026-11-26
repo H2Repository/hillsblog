@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { SupportedLanguage, translations, TranslationKeys, LANGUAGE_OPTIONS, LanguageOption } from '../i18n/translations';
 
 interface LanguageContextType {
@@ -19,10 +19,11 @@ const MANUAL_OVERRIDE_KEY = 'bike_diary_manual_override';
 const LEGACY_STORAGE_KEY = 'bike_diary_lang_pref';
 
 /**
- * Detect the operating system or browser's language preference
+ * Detect the operating system or browser's language preference.
+ * Defaults to English ('en') when no supported system language matches.
  */
 export const detectSystemLanguage = (): SupportedLanguage => {
-  if (typeof navigator === 'undefined') return 'ko';
+  if (typeof navigator === 'undefined') return 'en';
   try {
     const candidateLangs: string[] = [];
     if (Array.isArray(navigator.languages) && navigator.languages.length > 0) {
@@ -45,8 +46,8 @@ export const detectSystemLanguage = (): SupportedLanguage => {
       if (matched) {
         return matched.code;
       }
-      if (clean === 'kor') return 'ko';
       if (clean === 'eng') return 'en';
+      if (clean === 'kor') return 'ko';
       if (clean === 'jpn' || clean === 'jp') return 'ja';
       if (clean === 'vie') return 'vi';
       if (clean === 'spa') return 'es';
@@ -54,66 +55,68 @@ export const detectSystemLanguage = (): SupportedLanguage => {
   } catch (e) {
     console.warn('System language detection error:', e);
   }
-  return 'ko';
+  return 'en';
 };
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [systemLanguage, setSystemLanguage] = useState<SupportedLanguage>(() => detectSystemLanguage());
-  const [hasManualOverride, setHasManualOverride] = useState<boolean>(() => {
-    try {
-      return !!localStorage.getItem(MANUAL_OVERRIDE_KEY);
-    } catch {
-      return false;
-    }
-  });
+  const [hasManualOverride, setHasManualOverride] = useState<boolean>(false);
+  const [language, setLanguageState] = useState<SupportedLanguage>(() => detectSystemLanguage());
+  const lastSystemLangRef = useRef<SupportedLanguage>(systemLanguage);
+  const hasManualOverrideRef = useRef<boolean>(hasManualOverride);
 
-  // Initialize language: on execution, use manual override if explicitly chosen, otherwise use system language
-  const [language, setLanguageState] = useState<SupportedLanguage>(() => {
+  useEffect(() => {
+    hasManualOverrideRef.current = hasManualOverride;
+  }, [hasManualOverride]);
+
+  // Clear legacy persisted manual overrides on mount so startup always defaults to English / system language
+  useEffect(() => {
     try {
-      const manual = localStorage.getItem(MANUAL_OVERRIDE_KEY);
-      if (manual && LANGUAGE_OPTIONS.some(opt => opt.code === manual)) {
-        return manual as SupportedLanguage;
-      }
+      localStorage.removeItem(MANUAL_OVERRIDE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
       // ignore
     }
-    // Execution default: follows system language
-    return detectSystemLanguage();
-  });
+  }, []);
 
-  // Listen to browser/system language changes in real-time
+  // Listen to browser/system language changes in real-time (and re-check when returning to tab)
   useEffect(() => {
-    const handleLanguageChange = () => {
+    const syncWithSystemLanguage = (forceOnChange: boolean) => {
       const detected = detectSystemLanguage();
+      const prevSystemLang = lastSystemLangRef.current;
+      lastSystemLangRef.current = detected;
       setSystemLanguage(detected);
 
-      // If user hasn't explicitly locked a manual override, follow the new system language automatically
-      try {
-        const manual = localStorage.getItem(MANUAL_OVERRIDE_KEY);
-        if (!manual) {
-          setLanguageState(detected);
-          document.documentElement.lang = detected;
-        }
-      } catch {
+      if (!hasManualOverrideRef.current || (forceOnChange && detected !== prevSystemLang)) {
+        setHasManualOverride(false);
         setLanguageState(detected);
+        document.documentElement.lang = detected;
+      }
+    };
+
+    const handleLanguageChange = () => {
+      syncWithSystemLanguage(true);
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        syncWithSystemLanguage(true);
       }
     };
 
     window.addEventListener('languagechange', handleLanguageChange);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     return () => {
       window.removeEventListener('languagechange', handleLanguageChange);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, []);
 
   const setLanguage = (newLang: SupportedLanguage) => {
     setLanguageState(newLang);
     setHasManualOverride(true);
-    try {
-      localStorage.setItem(MANUAL_OVERRIDE_KEY, newLang);
-      localStorage.setItem(LEGACY_STORAGE_KEY, newLang);
-    } catch {
-      // ignore
-    }
     document.documentElement.lang = newLang;
   };
 
@@ -125,6 +128,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // ignore
     }
     const detected = detectSystemLanguage();
+    lastSystemLangRef.current = detected;
     setSystemLanguage(detected);
     setHasManualOverride(false);
     setLanguageState(detected);
@@ -136,8 +140,8 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [language]);
 
   const t = (key: TranslationKeys, params?: Record<string, string | number>): string => {
-    const langDict = translations[language] || translations.ko;
-    let str: string = (langDict as any)[key] || (translations.ko as any)[key] || String(key);
+    const langDict = translations[language] || translations.en;
+    let str: string = (langDict as any)[key] || (translations.en as any)[key] || (translations.ko as any)[key] || String(key);
 
     if (params) {
       Object.entries(params).forEach(([k, v]) => {
@@ -177,4 +181,3 @@ export const useLanguage = (): LanguageContextType => {
   }
   return context;
 };
-

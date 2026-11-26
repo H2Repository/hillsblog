@@ -18,7 +18,8 @@ import {
   WifiOff,
   RefreshCw,
   KeyRound,
-  Clock
+  Clock,
+  HelpCircle
 } from 'lucide-react';
 import { getCurrentGpsPosition, reverseGeocode } from '../utils/geo';
 import { useLanguage } from '../context/LanguageContext';
@@ -31,6 +32,7 @@ interface NavbarProps {
   onViewModeChange: (mode: ViewMode) => void;
   onOpenNewDiary: () => void;
   onExportData: () => void;
+  onOpenHelp: () => void;
   totalDiariesCount: number;
   serverDiariesCount: number | null;
   isServerOnline: boolean;
@@ -47,6 +49,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onViewModeChange,
   onOpenNewDiary,
   onExportData,
+  onOpenHelp,
   totalDiariesCount,
   serverDiariesCount,
   isServerOnline,
@@ -127,7 +130,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         onQuickLocate(pos.lat, pos.lng, info.address, info.region);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '위치를 확인할 수 없습니다.';
+      const msg = err instanceof Error ? err.message : t('menuGpsUnavailable');
       setGpsError(msg);
       setTimeout(() => setGpsError(null), 4000);
     } finally {
@@ -181,10 +184,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
               title={
                 !isServerOnline
-                  ? `오프라인 상태 · 서버 일기 ${serverDiariesCount !== null ? serverDiariesCount : '-'}개 (클릭하여 연결 확인)`
+                  ? t('navTooltipOffline', { count: serverDiariesCount !== null ? serverDiariesCount : '-' })
                   : isQuotaExceeded
-                    ? `일일 무료 읽기 할당량 초과 (내일 초기화) · 캐시 일기 ${serverDiariesCount !== null ? serverDiariesCount : '-'}개 (클릭하여 재확인)`
-                    : `온라인 연결됨 · 서버 일기 ${serverDiariesCount !== null ? serverDiariesCount : '-'}개 (클릭하여 새로고침)`
+                    ? t('navTooltipQuotaExceeded', { count: serverDiariesCount !== null ? serverDiariesCount : '-' })
+                    : t('navTooltipOnline', { count: serverDiariesCount !== null ? serverDiariesCount : '-' })
               }
             >
               {isCheckingServer ? (
@@ -203,7 +206,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
               <span className="hidden md:inline text-[11px] font-bold">
-                {!isServerOnline ? '오프라인' : isQuotaExceeded ? '할당초과' : '온라인'}
+                {!isServerOnline
+                  ? t('navStatusOffline')
+                  : isQuotaExceeded
+                    ? t('navStatusQuotaExceeded')
+                    : t('navStatusOnline')}
               </span>
               <span className="text-stone-500 hidden md:inline">·</span>
               <span
@@ -235,10 +242,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 }`}
                 title={
                   isOffline
-                    ? 'Off Mode (오프라인 로컬 일기 등록 가능)'
+                    ? t('navWriteTooltipOffline')
                     : isQuotaExceeded
-                      ? '일일 무료 할당량 초과 (로컬 일기 작성 가능)'
-                      : '새 일기 쓰기 (로컬 저장 후 서버 동기화 가능)'
+                      ? t('navWriteTooltipQuota')
+                      : t('navWriteTooltipOnline')
                 }
               >
                 {isOffline ? (
@@ -247,7 +254,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <Plus className={`w-4 h-4 ${isQuotaExceeded ? 'text-rose-200' : 'text-white'}`} />
                 )}
                 <span className="hidden sm:inline">
-                  일기 쓰기
+                  {t('writeDiary')}
                 </span>
                 {isOffline && (
                   <span className="sm:hidden px-1 rounded text-[9px] font-bold bg-white text-rose-700">
@@ -268,9 +275,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                     ? 'bg-amber-600/20 border-amber-500/40 text-amber-300 shadow-inner'
                     : 'bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border-stone-700'
                 }`}
-                title="더보기 메뉴 (백업, 관리자 로그온)"
+                title={t('navMenuTitle')}
                 aria-expanded={isMenuOpen}
-                aria-label="메뉴 열기"
+                aria-label={t('navMenuOpenAria')}
               >
                 {isMenuOpen ? (
                   <X className="w-5 h-5 text-amber-400" />
@@ -283,7 +290,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     className={`absolute top-1 right-1 w-2 h-2 rounded-full ring-2 ring-stone-900 ${
                       isAdmin ? 'bg-emerald-400' : 'bg-amber-400'
                     }`}
-                    title={isAdmin ? '블로그 관리자 로그인 상태' : '앱 사용 패스워드(로컬 편집) 활성화 상태'}
+                    title={isAdmin ? t('navMenuIndicatorAdmin') : t('navMenuIndicatorLocal')}
                   />
                 )}
               </button>
@@ -295,13 +302,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-stone-800">
                     <span className="text-xs font-bold text-stone-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Compass className="w-3.5 h-3.5 text-amber-400" />
-                      여행일기 메뉴
+                      {t('menuTitle')}
                     </span>
                     <button
                       type="button"
                       onClick={() => setIsMenuOpen(false)}
                       className="p-1 rounded-lg text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition"
-                      aria-label="메뉴 닫기"
+                      aria-label={t('navMenuCloseAria')}
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -309,30 +316,30 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   {/* 1. 관리자 모드 로그온 (블로그 관리자 로그인 / 앱 사용 패스워드 구분) */}
                   <div className="p-2 rounded-xl bg-stone-800/90 border border-stone-700/80 mb-1.5 shadow-xs space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <Lock className="w-3.5 h-3.5 text-amber-400" />
-                        관리자 모드 로그온
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5 min-w-0 truncate">
+                        <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span className="truncate">{t('menuAdminModeTitle')}</span>
                       </span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shrink-0 ${
                         isAdmin
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                           : canEditLocal
                             ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                             : 'bg-stone-700/60 text-stone-400'
                       }`}>
-                        {isAdmin ? '블로그 관리자' : canEditLocal ? '로컬 편집 허용' : '읽기 전용'}
+                        {isAdmin ? t('menuRoleAdmin') : canEditLocal ? t('menuRoleLocalEdit') : t('menuRoleReadOnly')}
                       </span>
                     </div>
 
                     {/* Local & Server Diary Count */}
                     <div className="flex items-center justify-between px-2 py-1 rounded-lg bg-stone-900/50 border border-stone-700/50 text-[11px] gap-1.5">
-                      <span className="text-stone-400">로컬 / 서버 일기</span>
-                      <div className="flex items-center gap-1.5 font-mono font-bold">
-                        <span className="text-amber-400">로컬 {totalDiariesCount}개</span>
+                      <span className="text-stone-400 truncate">{t('menuDiaryCountLabel')}</span>
+                      <div className="flex items-center gap-1.5 font-mono font-bold shrink-0">
+                        <span className="text-amber-400">{t('menuLocalCount', { count: totalDiariesCount })}</span>
                         <span className="text-stone-600">/</span>
                         <span className={isServerOnline ? 'text-emerald-400' : 'text-rose-400'}>
-                          서버 {serverDiariesCount !== null ? `${serverDiariesCount}개` : '-'}
+                          {t('menuServerCount', { count: serverDiariesCount !== null ? serverDiariesCount : '-' })}
                         </span>
                       </div>
                     </div>
@@ -342,10 +349,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <KeyRound className={`w-3.5 h-3.5 shrink-0 ${canEditLocal ? 'text-amber-400' : 'text-stone-400'}`} />
-                          <span className="text-[11px] font-bold text-stone-200 truncate">앱 사용 패스워드</span>
+                          <span className="text-[11px] font-bold text-stone-200 truncate">{t('menuPasscodeTitle')}</span>
                         </div>
                         <span className={`text-[10px] font-semibold shrink-0 ${canEditLocal ? 'text-amber-300' : 'text-stone-500'}`}>
-                          {isLocalEditUnlocked ? '편집 허용됨' : '추가·수정·삭제용'}
+                          {isLocalEditUnlocked ? t('menuPasscodeUnlocked') : t('menuPasscodeLockedHint')}
                         </span>
                       </div>
 
@@ -354,15 +361,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                           {/* Auto Location & Auto Diary Settings (앱 사용 패스워드 해제 시에만 표시) */}
                           <div className="p-1.5 rounded-lg bg-stone-800/80 border border-stone-700/70 space-y-1">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="text-[10px] font-bold text-stone-200 flex items-center gap-1">
-                                <Clock className="w-3 h-3 text-emerald-400" />
-                                자동 위치·일기 작성
+                              <span className="text-[10px] font-bold text-stone-200 flex items-center gap-1 min-w-0 truncate">
+                                <Clock className="w-3 h-3 text-emerald-400 shrink-0" />
+                                <span className="truncate">{t('menuAutoDiaryTitle')}</span>
                               </span>
                               <button
                                 id="btn-menu-toggle-auto-diary"
                                 type="button"
                                 onClick={() => updateAutoDiarySettings({ enabled: !autoDiarySettings.enabled })}
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition cursor-pointer ${
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition cursor-pointer shrink-0 ${
                                   autoDiarySettings.enabled
                                     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                                     : 'bg-stone-700/70 text-stone-400 border-stone-600'
@@ -374,7 +381,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                             <div className="flex items-center justify-between gap-1.5 text-[10px] text-stone-300">
                               <div className="flex items-center gap-1">
-                                <span className={autoDiarySettings.enabled ? 'text-stone-400' : 'text-stone-500'}>주기</span>
+                                <span className={autoDiarySettings.enabled ? 'text-stone-400' : 'text-stone-500'}>{t('menuAutoIntervalLabel')}</span>
                                 <input
                                   type="number"
                                   min={1}
@@ -390,7 +397,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                                       : 'border-stone-700/60 text-stone-500 opacity-50 cursor-not-allowed'
                                   }`}
                                 />
-                                <span className={autoDiarySettings.enabled ? '' : 'text-stone-500'}>분</span>
+                                <span className={autoDiarySettings.enabled ? '' : 'text-stone-500'}>{t('menuAutoUnitMin')}</span>
                               </div>
                               {onTriggerAutoDiaryNow && (
                                 <button
@@ -398,13 +405,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                                   type="button"
                                   disabled={!autoDiarySettings.enabled || isAutoDiaryRunning}
                                   onClick={() => onTriggerAutoDiaryNow()}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition shrink-0 ${
                                     autoDiarySettings.enabled
                                       ? 'bg-amber-600/80 hover:bg-amber-500 text-white disabled:opacity-50 cursor-pointer'
                                       : 'bg-stone-700/50 text-stone-500 border border-stone-700/70 opacity-60 cursor-not-allowed'
                                   }`}
                                 >
-                                  {isAutoDiaryRunning ? '확인 중...' : '지금 기록'}
+                                  {isAutoDiaryRunning ? t('menuAutoChecking') : t('menuAutoRunNow')}
                                 </button>
                               )}
                             </div>
@@ -430,23 +437,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                             </div>
 
                             {(autoDiarySettings.enabled || autoDiarySettings.lastAutoDiaryAt) && (
-                              <div className="text-[9px] text-stone-400 flex items-center justify-between pt-0.5">
+                              <div className="text-[9px] text-stone-400 flex items-center justify-between pt-0.5 gap-1">
                                 {autoDiarySettings.enabled && autoDiarySettings.nextAutoDiaryAt ? (
-                                  <span className="text-emerald-400/90">
-                                    다음 자동 확인:{' '}
-                                    {`${String(new Date(autoDiarySettings.nextAutoDiaryAt).getHours()).padStart(2, '0')}:${String(
-                                      new Date(autoDiarySettings.nextAutoDiaryAt).getMinutes()
-                                    ).padStart(2, '0')}`}
+                                  <span className="text-emerald-400/90 truncate">
+                                    {t('menuAutoNextCheck', {
+                                      time: `${String(new Date(autoDiarySettings.nextAutoDiaryAt).getHours()).padStart(2, '0')}:${String(
+                                        new Date(autoDiarySettings.nextAutoDiaryAt).getMinutes()
+                                      ).padStart(2, '0')}`,
+                                    })}
                                   </span>
                                 ) : (
-                                  <span>자동 작성 꺼짐</span>
+                                  <span>{t('menuAutoOffStatus')}</span>
                                 )}
                                 {autoDiarySettings.lastAutoDiaryAt && (
-                                  <span>
-                                    최근{' '}
-                                    {`${String(new Date(autoDiarySettings.lastAutoDiaryAt).getHours()).padStart(2, '0')}:${String(
-                                      new Date(autoDiarySettings.lastAutoDiaryAt).getMinutes()
-                                    ).padStart(2, '0')}`}
+                                  <span className="shrink-0">
+                                    {t('menuAutoLastRun', {
+                                      time: `${String(new Date(autoDiarySettings.lastAutoDiaryAt).getHours()).padStart(2, '0')}:${String(
+                                        new Date(autoDiarySettings.lastAutoDiaryAt).getMinutes()
+                                      ).padStart(2, '0')}`,
+                                    })}
                                   </span>
                                 )}
                               </div>
@@ -462,8 +471,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                             }}
                             className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-stone-700/70 hover:bg-rose-950/60 hover:text-rose-300 text-stone-300 text-[11px] font-semibold border border-stone-600/80 transition cursor-pointer"
                           >
-                            <Lock className="w-3.5 h-3.5 text-amber-400" />
-                            <span>{isAdmin ? '로컬 편집 잠금 (관리자 로그아웃)' : '로컬 편집 잠금'}</span>
+                            <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            <span className="truncate">{isAdmin ? t('menuLockLocalWithLogout') : t('menuLockLocal')}</span>
                           </button>
                         </div>
                       ) : (
@@ -476,8 +485,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                           }}
                           className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold shadow-sm shadow-amber-900/30 transition cursor-pointer"
                         >
-                          <KeyRound className="w-3.5 h-3.5" />
-                          <span>앱 사용 패스워드 입력</span>
+                          <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                          <span>{t('menuEnterPasscode')}</span>
                         </button>
                       )}
                     </div>
@@ -492,14 +501,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                                 currentUser ? 'text-emerald-400' : 'text-stone-400'
                               }`}
                             />
-                            <span className="text-[11px] font-bold text-stone-200 truncate">블로그 관리자 로그인</span>
+                            <span className="text-[11px] font-bold text-stone-200 truncate">{t('menuBlogAdminTitle')}</span>
                           </div>
                           <span
                             className={`text-[10px] font-semibold shrink-0 ${
                               currentUser ? 'text-emerald-400' : 'text-stone-500'
                             }`}
                           >
-                            {currentUser ? 'Google 인증됨' : '서버 동기화용'}
+                            {currentUser ? t('menuGoogleVerified') : t('menuServerSyncHint')}
                           </span>
                         </div>
 
@@ -513,8 +522,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                             }}
                             className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-stone-700/70 hover:bg-rose-950/60 hover:text-rose-300 text-stone-300 text-[11px] font-semibold border border-stone-600/80 transition cursor-pointer"
                           >
-                            <LogOut className="w-3.5 h-3.5 text-rose-400" />
-                            <span>블로그 관리자 로그아웃</span>
+                            <LogOut className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            <span className="truncate">{t('menuAdminLogout')}</span>
                           </button>
                         ) : (
                           <button
@@ -526,8 +535,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                             }}
                             className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-stone-700 hover:bg-stone-600 text-white text-[11px] font-bold border border-stone-600 transition cursor-pointer"
                           >
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>블로그 관리자 로그인 (Google)</span>
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            <span className="truncate">{t('menuAdminLoginGoogle')}</span>
                           </button>
                         )}
                       </div>
@@ -538,8 +547,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div className="p-2 rounded-xl bg-stone-800/60 border border-stone-700/60 mb-1.5">
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                        실시간 내 위치 확인
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>{t('gpsCheck')}</span>
                       </span>
                     </div>
                     {currentGpsInfo ? (
@@ -562,14 +571,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                         type="button"
                         onClick={handleFetchCurrentGps}
                         disabled={gpsLoading}
-                        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-xl bg-stone-700 hover:bg-stone-600 text-white text-xs font-bold transition disabled:opacity-50"
+                        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-xl bg-stone-700 hover:bg-stone-600 text-white text-xs font-bold transition disabled:opacity-50 cursor-pointer"
                       >
                         {gpsLoading ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
                         ) : (
                           <Navigation className="w-3.5 h-3.5 text-amber-400" />
                         )}
-                        <span>{gpsLoading ? '위치 확인 중...' : '현재 위치 확인하기'}</span>
+                        <span>{gpsLoading ? t('gpsChecking') : t('menuCheckLocationBtn')}</span>
                       </button>
                     )}
                     {gpsError && (
@@ -594,21 +603,46 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <Database className="w-3.5 h-3.5" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-white group-hover:text-amber-300 transition">
-                            데이터 관리 (백업 및 가져오기)
+                          <p className="text-xs font-bold text-white group-hover:text-amber-300 transition truncate">
+                            {t('menuDataManagementTitle')}
                           </p>
                           <p className="text-[10px] text-stone-400 truncate">
-                            전체 백업 다운로드 / JSON 파일 가져오기
+                            {t('menuDataManagementDesc')}
                           </p>
                         </div>
                       </button>
                     </div>
                   )}
 
+                  {/* 앱 도움말 (전체 사용자 열람 가능) */}
+                  <div className={canEditLocal || isAdmin ? 'mt-1' : ''}>
+                    <button
+                      id="btn-menu-app-help"
+                      type="button"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onOpenHelp();
+                      }}
+                      className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-stone-800 text-left transition group cursor-pointer border border-transparent hover:border-stone-700"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-stone-800 group-hover:bg-emerald-600/20 flex items-center justify-center text-emerald-400 border border-stone-700 group-hover:border-emerald-500/40 transition shrink-0">
+                        <HelpCircle className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white group-hover:text-emerald-300 transition truncate">
+                          {t('menuAppHelpTitle')}
+                        </p>
+                        <p className="text-[10px] text-stone-400 truncate">
+                          {t('menuAppHelpDesc')}
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+
                   {/* 앱 버전 정보 */}
                   <div className="mt-1.5 pt-1.5 border-t border-stone-800 flex items-center justify-between gap-2 px-1 text-[10px] text-stone-400 whitespace-nowrap">
                     <span className="flex items-center gap-1.5">
-                      <span>앱버전</span>
+                      <span>{t('menuAppVersion')}</span>
                       <span className="font-mono font-semibold text-stone-300">{appVersion}</span>
                     </span>
                     <span className="font-mono font-semibold text-stone-300">{__APP_BUILD_TIME__}</span>

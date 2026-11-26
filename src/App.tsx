@@ -21,6 +21,7 @@ import { DiaryDetailModal } from './components/DiaryDetailModal';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmModal } from './components/ConfirmModal';
 import { DataManagementModal } from './components/DataManagementModal';
+import { AppHelpModal } from './components/AppHelpModal';
 import { LoginModal } from './components/LoginModal';
 import { useLanguage } from './context/LanguageContext';
 import { useAuth } from './context/AuthContext';
@@ -83,6 +84,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('blog');
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [initialServerMeta] = useState(() => getCachedServerMetaMap());
   const [serverMetaMap, setServerMetaMap] = useState<Record<string, ServerDiaryMeta>>(initialServerMeta.metaMap);
   const [hasLoadedServerMeta, setHasLoadedServerMeta] = useState(initialServerMeta.hasLoaded);
@@ -1361,6 +1363,7 @@ export default function App() {
             setIsExportModalOpen(true);
           }
         }}
+        onOpenHelp={() => setIsHelpModalOpen(true)}
         totalDiariesCount={diaries.length}
         serverDiariesCount={serverDiariesCount}
         isServerOnline={isServerOnline}
@@ -1585,6 +1588,10 @@ export default function App() {
             setToastMessage({ text: `초기화 실패: ${err.message}`, type: 'error' });
           }
         }}
+      />
+      <AppHelpModal
+        isOpen={isHelpModalOpen}
+        onClose={() => setIsHelpModalOpen(false)}
       />
       <LoginModal />
 

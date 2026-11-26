@@ -245,8 +245,8 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                     ? 'bg-white text-stone-900 shadow-2xs font-bold'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
-                title="최신순 (최신 일기부터 정렬)"
-                aria-label="최신순 정렬"
+                title={t('sortLatestTitle')}
+                aria-label={t('sortLatestTitle')}
               >
                 <ArrowDownWideNarrow className="w-3.5 h-3.5" />
               </button>
@@ -258,8 +258,8 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                     ? 'bg-white text-stone-900 shadow-2xs font-bold'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
-                title="오래된순 (과거 일기부터 정렬)"
-                aria-label="오래된순 정렬"
+                title={t('sortOldestTitle')}
+                aria-label={t('sortOldestTitle')}
               >
                 <ArrowUpNarrowWide className="w-3.5 h-3.5" />
               </button>
@@ -386,7 +386,7 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         {(diary.location?.includeInDistance ?? diary.includeInDistance ?? true) === false && (
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-stone-900/80 backdrop-blur-sm border border-stone-400/40 text-stone-200 flex items-center gap-1">
                             <span>🚫</span>
-                            <span>거리 제외</span>
+                            <span>{t('cardDistanceExcluded')}</span>
                           </span>
                         )}
                       </div>
@@ -453,7 +453,7 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                       }}
                       className="text-lg font-bold text-stone-900 group-hover:text-amber-700 transition cursor-pointer leading-snug line-clamp-2 mb-2"
                     >
-                      {diary.title || '제목 없음'}
+                      {diary.title || t('cardNoTitle')}
                     </h2>
 
                     {/* Content Snippet */}
@@ -464,7 +464,7 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                       }}
                       className="text-xs text-stone-600 line-clamp-3 leading-relaxed font-serif cursor-pointer whitespace-pre-line"
                     >
-                      {diary.content || '(일기 내용이 없습니다)'}
+                      {diary.content || t('cardNoContent')}
                     </p>
                   </div>
 
@@ -542,12 +542,12 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         }`}
                         title={
                           serverStatus === 'not_on_server'
-                            ? '서버 미등록 - 클릭하여 서버에 추가'
+                            ? t('syncTooltipNotOnServer')
                             : serverStatus === 'needs_update'
-                              ? '수정됨 - 클릭하여 서버 업데이트'
-                              : '서버에 추가/업데이트 완료됨'
+                              ? t('syncTooltipNeedsUpdate')
+                              : t('syncTooltipSynced')
                         }
-                        aria-label="서버 반영 상태"
+                        aria-label={t('syncAriaLabel')}
                       >
                         {isUploading ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -560,12 +560,12 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                         )}
                         <span>
                           {isUploading
-                            ? '전송 중'
+                            ? t('syncStatusUploading')
                             : serverStatus === 'not_on_server'
-                              ? '미등록'
+                              ? t('syncStatusNotOnServer')
                               : serverStatus === 'needs_update'
-                                ? '수정됨'
-                                : '서버됨'}
+                                ? t('syncStatusNeedsUpdate')
+                                : t('syncStatusSynced')}
                         </span>
                       </button>
                     </div>
@@ -620,10 +620,10 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
             <Loader2 className="w-6 h-6 animate-spin" />
           </div>
           <h3 className="text-base font-bold text-stone-900">
-            서버에서 일기를 불러오는 중...
+            {t('feedLoadingTitle')}
           </h3>
           <p className="text-xs text-stone-500">
-            Cloud SQL 서버에 저장된 기존 여행 일기를 자동으로 복원하고 있습니다.
+            {t('feedLoadingDesc')}
           </p>
         </div>
       ) : (
@@ -634,10 +634,10 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
           </div>
           <div>
             <h3 className="text-base font-bold text-stone-900">
-              일기를 찾을 수 없습니다
+              {t('feedEmptyTitle')}
             </h3>
             <p className="text-xs text-stone-500 mt-1">
-              검색 결과가 없거나 저장된 일기가 없습니다. 새 일기를 작성하거나 JSON 백업 파일을 가져와 보세요.
+              {t('feedEmptyDesc')}
             </p>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">

@@ -15,6 +15,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const AUTO_DIARY_PRESET_MINUTES = [5, 10, 15, 30, 60, 120];
 
@@ -25,6 +26,7 @@ function formatShortTime(ts: number | null): string {
 }
 
 export const LoginModal: React.FC = () => {
+  const { t } = useLanguage();
   const {
     isLoginModalOpen,
     loginModalTab,
@@ -73,7 +75,7 @@ export const LoginModal: React.FC = () => {
     setIsSubmitting(false);
 
     if (!res.success) {
-      setErrorMessage(res.error || 'Google 로그인 중 오류가 발생했습니다.');
+      setErrorMessage(res.error || t('loginGoogleErrFallback'));
       if (res.offerRedirectFallback) {
         setShowRedirectFallback(true);
       }
@@ -86,7 +88,7 @@ export const LoginModal: React.FC = () => {
     const res = await loginWithGoogleRedirect();
     if (!res.success) {
       setIsSubmitting(false);
-      setErrorMessage(res.error || '페이지 이동 로그인 중 오류가 발생했습니다.');
+      setErrorMessage(res.error || t('loginRedirectErrFallback'));
     }
   };
 
@@ -101,7 +103,7 @@ export const LoginModal: React.FC = () => {
       keepModalOpen: shouldKeepOpen,
     });
     if (!res.success) {
-      setPasscodeError(res.error || '패스워드를 확인해 주세요.');
+      setPasscodeError(res.error || t('loginPasscodeErrorFallback'));
     } else {
       setPasscodeInput('');
       if (shouldReturnToAdmin) {
@@ -138,17 +140,15 @@ export const LoginModal: React.FC = () => {
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-xs font-bold text-stone-800 flex-wrap">
               <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeEnabled ? 'text-emerald-600' : 'text-stone-400'}`} />
-              <span>자동 위치 확인 · 자동 일기 작성</span>
+              <span>{t('loginAutoTitle')}</span>
               {!isUnlocked && (
                 <span className="px-1.5 py-0.5 rounded bg-stone-200 text-stone-600 text-[10px] font-semibold">
-                  해제 후 사용 가능
+                  {t('loginAutoUnlockBadge')}
                 </span>
               )}
             </div>
             <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">
-              {isUnlocked
-                ? '설정된 시간 간격마다 현재 GPS 위치를 확인하여 이동 일기를 자동으로 로컬에 기록합니다.'
-                : '앱 사용 패스워드를 해제하면 자동 위치 확인 및 자동 일기 작성 토글을 활성화할 수 있습니다.'}
+              {isUnlocked ? t('loginAutoDescUnlocked') : t('loginAutoDescLocked')}
             </p>
           </div>
           <button
@@ -179,7 +179,7 @@ export const LoginModal: React.FC = () => {
             <div className="flex items-center justify-between gap-2 text-[11px]">
               <span className={`font-semibold flex items-center gap-1 ${activeEnabled ? 'text-stone-700' : 'text-stone-400'}`}>
                 <Clock className={`w-3.5 h-3.5 ${activeEnabled ? 'text-amber-600' : 'text-stone-400'}`} />
-                확인 시간 간격
+                {t('loginAutoIntervalTitle')}
               </span>
               <div className="flex items-center gap-1">
                 <input
@@ -192,7 +192,9 @@ export const LoginModal: React.FC = () => {
                   onChange={(e) => handleIntervalChange(Number(e.target.value))}
                   className="w-[66px] px-2 py-1 rounded-lg border border-stone-300 bg-white text-center !text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/40 disabled:bg-stone-100 disabled:border-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed"
                 />
-                <span className={`font-semibold ${activeEnabled ? 'text-stone-600' : 'text-stone-400'}`}>분마다</span>
+                <span className={`font-semibold ${activeEnabled ? 'text-stone-600' : 'text-stone-400'}`}>
+                  {t('loginAutoEveryUnit')}
+                </span>
               </div>
             </div>
 
@@ -211,7 +213,7 @@ export const LoginModal: React.FC = () => {
                         : 'bg-white text-stone-600 border-stone-300 hover:bg-stone-100 cursor-pointer'
                   }`}
                 >
-                  {mins}분
+                  {t('loginAutoPresetUnit', { mins })}
                 </button>
               ))}
             </div>
@@ -220,17 +222,17 @@ export const LoginModal: React.FC = () => {
           {isUnlocked && (
             <div className="flex items-center justify-between text-[10px] text-stone-500 pt-1">
               <span>
-                상태:{' '}
+                {t('loginAutoStatusLabel')}{' '}
                 <strong className={autoDiarySettings.enabled ? 'text-emerald-700' : 'text-stone-600'}>
-                  {autoDiarySettings.enabled ? '자동 작성 켜짐' : '사용 안 함'}
+                  {autoDiarySettings.enabled ? t('loginAutoStatusOn') : t('loginAutoStatusOff')}
                 </strong>
               </span>
               <span>
                 {autoDiarySettings.enabled
-                  ? `다음 기록 ${formatShortTime(autoDiarySettings.nextAutoDiaryAt)}`
+                  ? t('loginAutoNextRecord', { time: formatShortTime(autoDiarySettings.nextAutoDiaryAt) })
                   : autoDiarySettings.lastAutoDiaryAt
-                    ? `최근 ${formatShortTime(autoDiarySettings.lastAutoDiaryAt)}`
-                    : '대기 중'}
+                    ? t('menuAutoLastRun', { time: formatShortTime(autoDiarySettings.lastAutoDiaryAt) })
+                    : t('loginAutoWaiting')}
               </span>
             </div>
           )}
@@ -260,12 +262,12 @@ export const LoginModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2 truncate">
-                관리자 모드 로그온
+                {t('menuAdminModeTitle')}
               </h2>
               <p className="text-[10px] sm:text-xs text-stone-400 mt-0.5 leading-tight">
                 {!isLocalEditUnlocked || loginModalTab === 'local'
-                  ? '앱 사용 패스워드로 로컬 편집 및 자동 위치 기록을 설정합니다.'
-                  : 'Cloud SQL 서버 동기화를 위해 블로그 관리자 Google 로그인을 진행합니다.'}
+                  ? t('loginSubtitleLocal')
+                  : t('loginSubtitleAdmin')}
               </p>
             </div>
           </div>
@@ -296,7 +298,7 @@ export const LoginModal: React.FC = () => {
               }`}
             >
               <KeyRound className="w-3.5 h-3.5" />
-              <span>앱 사용 패스워드</span>
+              <span>{t('loginTabPasscode')}</span>
             </button>
             <button
               id="tab-auth-google-admin"
@@ -312,7 +314,7 @@ export const LoginModal: React.FC = () => {
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>블로그 관리자 로그인</span>
+              <span>{t('loginTabAdmin')}</span>
             </button>
           </div>
         )}
@@ -335,12 +337,10 @@ export const LoginModal: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-stone-900">
-                    {isAdmin ? '앱 패스워드 해제 · 블로그 관리자 로그인됨' : '앱 사용 패스워드가 해제되어 있습니다'}
+                    {isAdmin ? t('loginUnlockedAdminTitle') : t('loginUnlockedLocalTitle')}
                   </h3>
                   <p className="text-[11px] sm:text-xs text-stone-500 mt-1 leading-relaxed">
-                    {isAdmin
-                      ? '로컬 편집과 서버 동기화 모두 활성화되어 있으며, 아래에서 자동 위치 기록 설정을 조절할 수 있습니다.'
-                      : '로컬 일기 추가·수정·삭제가 가능하며, 2단계 블로그 관리자 로그인도 이용할 수 있습니다.'}
+                    {isAdmin ? t('loginUnlockedAdminDesc') : t('loginUnlockedLocalDesc')}
                   </p>
                 </div>
 
@@ -352,7 +352,7 @@ export const LoginModal: React.FC = () => {
                     onClick={closeLoginModal}
                     className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition cursor-pointer"
                   >
-                    설정 완료 (닫기)
+                    {t('loginDoneClose')}
                   </button>
                   {!currentUser && (
                     <button
@@ -361,7 +361,7 @@ export const LoginModal: React.FC = () => {
                       className="w-full py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-emerald-300 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>블로그 관리자 로그인으로 이동</span>
+                      <span>{t('loginGoToAdminTab')}</span>
                     </button>
                   )}
                   <button
@@ -373,17 +373,15 @@ export const LoginModal: React.FC = () => {
                     className="w-full py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Lock className="w-3.5 h-3.5 text-rose-500" />
-                    <span>{isAdmin ? '앱 편집 모드 잠그기 (관리자 로그아웃 포함)' : '앱 편집 모드 잠그기'}</span>
+                    <span>{isAdmin ? t('loginLockBtnAdmin') : t('loginLockBtnLocal')}</span>
                   </button>
                 </div>
               </div>
             ) : (
               <form onSubmit={handlePasscodeSubmit} className="space-y-4 py-1">
                 <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-stone-700 text-[11px] sm:text-xs space-y-1.5">
-                  <p className="font-bold text-amber-950">1단계: 앱 사용 패스워드 해제</p>
-                  <p className="leading-relaxed text-stone-600">
-                    패스워드를 해제해야 로컬 일기 추가·수정·삭제 및 2단계 블로그 관리자(Google) 로그인을 사용할 수 있습니다.
-                  </p>
+                  <p className="font-bold text-amber-950">{t('loginStep1Title')}</p>
+                  <p className="leading-relaxed text-stone-600">{t('loginStep1Desc')}</p>
                 </div>
 
                 {passcodeError && (
@@ -395,7 +393,7 @@ export const LoginModal: React.FC = () => {
 
                 <div className="space-y-1.5">
                   <label htmlFor="input-app-passcode" className="block text-xs font-bold text-stone-700">
-                    앱 사용 패스워드
+                    {t('loginTabPasscode')}
                   </label>
                   <div className="relative">
                     <input
@@ -406,7 +404,7 @@ export const LoginModal: React.FC = () => {
                         setPasscodeInput(e.target.value);
                         if (passcodeError) setPasscodeError(null);
                       }}
-                      placeholder="패스워드를 입력하세요"
+                      placeholder={t('loginPasscodePlaceholder')}
                       autoFocus
                       autoComplete="current-password"
                       className="w-full pl-3.5 pr-10 py-2.5 rounded-xl border border-stone-300 bg-white text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500"
@@ -415,7 +413,7 @@ export const LoginModal: React.FC = () => {
                       type="button"
                       onClick={() => setShowPasscode((prev) => !prev)}
                       className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-700 transition cursor-pointer"
-                      aria-label={showPasscode ? '패스워드 숨기기' : '패스워드 보기'}
+                      aria-label={showPasscode ? t('loginPasscodeHide') : t('loginPasscodeShow')}
                     >
                       {showPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -429,9 +427,7 @@ export const LoginModal: React.FC = () => {
                 >
                   <KeyRound className="w-4 h-4" />
                   <span>
-                    {returnToAdminAfterUnlock
-                      ? '패스워드 해제 후 관리자 로그인으로 이동'
-                      : '패스워드로 추가·수정·삭제 허용'}
+                    {returnToAdminAfterUnlock ? t('loginUnlockThenAdminBtn') : t('loginUnlockBtn')}
                   </span>
                 </button>
               </form>
@@ -443,13 +439,11 @@ export const LoginModal: React.FC = () => {
               </div>
               <div className="space-y-1.5">
                 <span className="inline-block px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
-                  1단계 패스워드 해제 필요
+                  {t('loginNeedStep1Badge')}
                 </span>
-                <h3 className="text-sm font-bold text-stone-900">
-                  앱 사용 패스워드를 먼저 해제해 주세요
-                </h3>
+                <h3 className="text-sm font-bold text-stone-900">{t('loginNeedStep1Title')}</h3>
                 <p className="text-[11px] sm:text-xs text-stone-500 leading-relaxed">
-                  블로그 관리자(Google) 로그인은 보안을 위해 1단계 앱 사용 패스워드를 해제한 상태에서만 활성화됩니다.
+                  {t('loginNeedStep1Desc')}
                 </p>
               </div>
               <button
@@ -462,7 +456,7 @@ export const LoginModal: React.FC = () => {
                 className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
               >
                 <KeyRound className="w-4 h-4" />
-                <span>1단계: 앱 사용 패스워드 입력하기</span>
+                <span>{t('loginGoStep1Btn')}</span>
               </button>
             </div>
           ) : currentUser ? (
@@ -471,13 +465,14 @@ export const LoginModal: React.FC = () => {
                 <CheckCircle2 className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-stone-900">현재 로그인되어 있습니다</h3>
+                <h3 className="text-sm font-bold text-stone-900">{t('loginSignedInTitle')}</h3>
                 <p className="text-[11px] sm:text-xs text-stone-500 mt-1 break-all">
-                  인증 계정: <span className="font-semibold text-stone-800">{currentUser.displayName || '블로그 관리자'}</span>
+                  {t('loginVerifiedAccount')}{' '}
+                  <span className="font-semibold text-stone-800">{currentUser.displayName || t('menuRoleAdmin')}</span>
                 </p>
                 <div className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[10px] sm:text-xs font-semibold">
                   <UserCheck className="w-3.5 h-3.5" />
-                  <span>블로그 관리자 (서버 동기화 + 전체 권한)</span>
+                  <span>{t('loginAdminRoleBadge')}</span>
                 </div>
               </div>
               <div className="pt-2">
@@ -487,17 +482,15 @@ export const LoginModal: React.FC = () => {
                   className="w-full py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5 text-rose-500" />
-                  <span>블로그 관리자 로그아웃</span>
+                  <span>{t('menuAdminLogout')}</span>
                 </button>
               </div>
             </div>
           ) : (
             <div className="space-y-4 py-1">
               <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 text-stone-600 text-[11px] sm:text-xs space-y-1.5">
-                <p className="font-bold text-stone-800">2단계: 블로그 관리자 Google 계정 안내</p>
-                <p className="leading-relaxed">
-                  서버 DB(Cloud SQL) 보안 정책에 따라 등록된 블로그 관리자 Google 계정으로 인증하면 서버 동기화 및 모든 일기 관리 기능을 이용할 수 있습니다.
-                </p>
+                <p className="font-bold text-stone-800">{t('loginStep2Title')}</p>
+                <p className="leading-relaxed">{t('loginStep2Desc')}</p>
               </div>
 
               {errorMessage && (
@@ -524,7 +517,7 @@ export const LoginModal: React.FC = () => {
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
                 )}
-                <span>{isSubmitting ? 'Google 로그인 중...' : 'Google 계정으로 로그인'}</span>
+                <span>{isSubmitting ? t('loginGoogleSigningIn') : t('loginGoogleBtn')}</span>
               </button>
 
               {canUseRedirectFallback && showRedirectFallback && (
@@ -534,7 +527,7 @@ export const LoginModal: React.FC = () => {
                   disabled={isSubmitting || isLoading}
                   className="w-full py-2.5 px-4 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
                 >
-                  <span>페이지 이동(리디렉션)으로 Google 로그인 시도</span>
+                  <span>{t('loginGoogleRedirectBtn')}</span>
                 </button>
               )}
             </div>
@@ -543,9 +536,9 @@ export const LoginModal: React.FC = () => {
 
         {/* Footer info */}
         <div className="px-5 sm:px-6 py-3 bg-stone-50 border-t border-stone-200 text-[10px] sm:text-[11px] text-stone-500 flex items-center justify-between shrink-0">
-          <span className="truncate mr-2">방문자 모드: 인증 없이 일기 열람 및 지도 탐색 가능</span>
+          <span className="truncate mr-2">{t('loginFooterVisitor')}</span>
           <span className="text-amber-700 font-bold shrink-0">
-            {!isLocalEditUnlocked || loginModalTab === 'local' ? '로컬 편집용' : '서버 관리자용'}
+            {!isLocalEditUnlocked || loginModalTab === 'local' ? t('loginFooterLocal') : t('loginFooterAdmin')}
           </span>
         </div>
       </div>

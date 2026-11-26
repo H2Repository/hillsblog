@@ -331,11 +331,12 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
                 }`}
                 title={
                   serverStatus === 'not_on_server'
-                    ? '서버 미등록 - 클릭하여 서버에 추가'
+                    ? t('syncTooltipNotOnServer')
                     : serverStatus === 'needs_update'
-                      ? '수정됨 - 클릭하여 서버에 업데이트'
-                      : '서버에 추가/업데이트 완료됨'
+                      ? t('syncTooltipNeedsUpdate')
+                      : t('syncTooltipSynced')
                 }
+                aria-label={t('syncAriaLabel')}
               >
                 {isUploadingToServer ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -348,12 +349,12 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
                 )}
                 <span className="text-[11px] sm:text-xs">
                   {isUploadingToServer
-                    ? '전송 중'
+                    ? t('syncStatusUploading')
                     : serverStatus === 'not_on_server'
-                      ? '미등록'
+                      ? t('syncStatusNotOnServer')
                       : serverStatus === 'needs_update'
-                        ? '수정됨'
-                        : '서버됨'}
+                        ? t('syncStatusNeedsUpdate')
+                        : t('syncStatusSynced')}
                 </span>
               </button>
             )}
