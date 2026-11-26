@@ -1,4 +1,4 @@
-import { DiaryEntry, TravelPhoto } from '../types';
+import { DiaryEntry, DiaryVisitRecord, ExportedDiaryEntry, TravelPhoto } from '../types';
 
 /**
  * Checks if a photo URL is non-empty and valid for rendering.
@@ -394,8 +394,9 @@ export function filterDiariesForExport(diaries: DiaryEntry[], options: ExportOpt
  */
 export async function exportDiariesWithOptions(
   diaries: DiaryEntry[],
-  options: ExportOptions
-): Promise<{ count: number; success: boolean; fileName: string }> {
+  options: ExportOptions,
+  visitsByDiary?: Record<string, DiaryVisitRecord[]>
+): Promise<{ count: number; visitCount: number; success: boolean; fileName: string }> {
   const filtered = filterDiariesForExport(diaries, options);
   const count = filtered.length;
 
@@ -445,13 +446,22 @@ export async function exportDiariesWithOptions(
   const fileName = `viajes_${formatYymmdd(startYmd)}~${formatMmdd(endYmd)}(${count}).json`;
 
   if (filtered.length === 0) {
-    return { count: 0, success: false, fileName };
+    return { count: 0, visitCount: 0, success: false, fileName };
   }
 
+  let totalVisitCount = 0;
   const blobParts: BlobPart[] = ['[\n'];
   for (let i = 0; i < filtered.length; i++) {
     if (i > 0) blobParts.push(',\n');
-    blobParts.push(JSON.stringify(filtered[i], null, 2));
+    const itemVisits = visitsByDiary?.[filtered[i].id];
+    const exportItem: ExportedDiaryEntry =
+      Array.isArray(itemVisits) && itemVisits.length > 0
+        ? { ...filtered[i], visits: itemVisits }
+        : filtered[i];
+    if (Array.isArray(itemVisits)) {
+      totalVisitCount += itemVisits.length;
+    }
+    blobParts.push(JSON.stringify(exportItem, null, 2));
   }
   blobParts.push('\n]');
   const blob = new Blob(blobParts, { type: 'application/json;charset=utf-8' });
@@ -475,7 +485,7 @@ export async function exportDiariesWithOptions(
     } catch {}
   }, 4000);
 
-  return { count: filtered.length, success: true, fileName };
+  return { count: filtered.length, visitCount: totalVisitCount, success: true, fileName };
 }
 
 /**

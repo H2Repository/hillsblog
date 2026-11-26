@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, gt, inArray, isNull, notInArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { db } from './index.ts';
-import { diaries, diaryPhotos, type LocalInsightsRow, users } from './schema.ts';
+import { diaries, diaryPhotos, diaryVisits, type LocalInsightsRow, users } from './schema.ts';
 
 export interface ServerDiaryMetaDto {
   id: string;
@@ -12,6 +12,16 @@ export interface ServerDiaryMetaDto {
   hasSubcollectionPhotos?: boolean;
   includeInDistance?: boolean;
   photoSigs?: Record<string, string>;
+  visitCount?: number;
+}
+
+export interface DiaryVisitDto {
+  id: string;
+  diaryId: string;
+  visitorName: string;
+  message: string;
+  reaction: string;
+  visitedAt: number;
 }
 
 export interface UpsertPhotoMetaInput {
@@ -175,6 +185,21 @@ export async function getServerDiaryMetaMapForUser(
       map[p.photoId] = formatPhotoFullSig(p.contentSig, p.isCover, p.orderIndex, p.caption);
     }
 
+    const visitCountRows = await db
+      .select({
+        diaryId: diaryVisits.diaryId,
+        visitCount: sql<number>`count(*)::int`,
+      })
+      .from(diaryVisits)
+      .innerJoin(diaries, eq(diaryVisits.diaryId, diaries.id))
+      .where(eq(diaries.userId, userId))
+      .groupBy(diaryVisits.diaryId);
+
+    const visitCountMap = new Map<string, number>();
+    for (const v of visitCountRows) {
+      visitCountMap.set(v.diaryId, Number(v.visitCount) || 0);
+    }
+
     const metaMap: Record<string, ServerDiaryMetaDto> = {};
     for (const d of diaryRows) {
       metaMap[d.id] = {
@@ -187,6 +212,7 @@ export async function getServerDiaryMetaMapForUser(
         hasSubcollectionPhotos: d.totalPhotosCount > 0,
         includeInDistance: d.includeInDistance ?? true,
         photoSigs: sigsByDiary.get(d.id) || {},
+        visitCount: visitCountMap.get(d.id) || 0,
       };
     }
 
@@ -659,5 +685,282 @@ export async function includeAllDiariesInDistanceForUser(
   } catch (error) {
     console.error('Failed to include all diaries in distance:', error);
     throw new Error('서버 일기의 누적거리 포함 설정을 일괄 업데이트하지 못했습니다.', { cause: error });
+  }
+}
+
+export async function getDiaryVisitsForDiary(
+  ownerUserId: number,
+  diaryId: string
+): Promise<DiaryVisitDto[]> {
+  try {
+    const owned = await db
+      .select({ id: diaries.id })
+      .from(diaries)
+      .where(and(eq(diaries.id, diaryId), eq(diaries.userId, ownerUserId)))
+      .limit(1);
+
+    if (owned.length === 0) {
+      return [];
+    }
+
+    const rows = await db
+      .select({
+        id: diaryVisits.id,
+        diaryId: diaryVisits.diaryId,
+        visitorName: diaryVisits.visitorName,
+        message: diaryVisits.message,
+        reaction: diaryVisits.reaction,
+        visitedAtMs: diaryVisits.visitedAtMs,
+      })
+      .from(diaryVisits)
+      .where(eq(diaryVisits.diaryId, diaryId))
+      .orderBy(desc(diaryVisits.visitedAtMs))
+      .limit(200);
+
+    return rows.map((r) => ({
+      id: r.id,
+      diaryId: r.diaryId,
+      visitorName: r.visitorName,
+      message: r.message,
+      reaction: r.reaction,
+      visitedAt: Number(r.visitedAtMs) || Date.now(),
+    }));
+  } catch (error) {
+    console.error('Failed to get diary visits:', error);
+    throw new Error('방문자 기록을 불러오지 못했습니다.', { cause: error });
+  }
+}
+
+export async function createDiaryVisitForDiary(
+  ownerUserId: number,
+  diaryId: string,
+  input: { visitorName: string; message: string; reaction: string }
+): Promise<DiaryVisitDto | null> {
+  try {
+    const owned = await db
+      .select({ id: diaries.id })
+      .from(diaries)
+      .where(and(eq(diaries.id, diaryId), eq(diaries.userId, ownerUserId)))
+      .limit(1);
+
+    if (owned.length === 0) {
+      return null;
+    }
+
+    const nowMs = Date.now();
+    const visitId = `visit_${nowMs}_${Math.random().toString(36).slice(2, 8)}`;
+
+    await db.insert(diaryVisits).values({
+      id: visitId,
+      diaryId,
+      visitorName: input.visitorName,
+      message: input.message,
+      reaction: input.reaction,
+      visitedAtMs: nowMs,
+      createdAt: new Date(),
+    });
+
+    return {
+      id: visitId,
+      diaryId,
+      visitorName: input.visitorName,
+      message: input.message,
+      reaction: input.reaction,
+      visitedAt: nowMs,
+    };
+  } catch (error) {
+    console.error('Failed to create diary visit:', error);
+    throw new Error('방문자 기록을 저장하지 못했습니다.', { cause: error });
+  }
+}
+
+export async function deleteDiaryVisitForUser(
+  ownerUserId: number,
+  diaryId: string,
+  visitId: string
+): Promise<boolean> {
+  try {
+    const owned = await db
+      .select({ id: diaries.id })
+      .from(diaries)
+      .where(and(eq(diaries.id, diaryId), eq(diaries.userId, ownerUserId)))
+      .limit(1);
+
+    if (owned.length === 0) {
+      return false;
+    }
+
+    const deleted = await db
+      .delete(diaryVisits)
+      .where(and(eq(diaryVisits.id, visitId), eq(diaryVisits.diaryId, diaryId)))
+      .returning({ id: diaryVisits.id });
+
+    return deleted.length > 0;
+  } catch (error) {
+    console.error('Failed to delete diary visit:', error);
+    throw new Error('방문자 기록을 삭제하지 못했습니다.', { cause: error });
+  }
+}
+
+export async function getDiaryVisitsMapForUser(
+  ownerUserId: number,
+  targetDiaryIds?: string[]
+): Promise<Record<string, DiaryVisitDto[]>> {
+  try {
+    const ownedRows = await db
+      .select({ id: diaries.id })
+      .from(diaries)
+      .where(
+        targetDiaryIds && targetDiaryIds.length > 0
+          ? and(eq(diaries.userId, ownerUserId), inArray(diaries.id, targetDiaryIds))
+          : eq(diaries.userId, ownerUserId)
+      );
+
+    if (ownedRows.length === 0) {
+      return {};
+    }
+
+    const validIds = ownedRows.map((r) => r.id);
+    const visitRows = await db
+      .select({
+        id: diaryVisits.id,
+        diaryId: diaryVisits.diaryId,
+        visitorName: diaryVisits.visitorName,
+        message: diaryVisits.message,
+        reaction: diaryVisits.reaction,
+        visitedAtMs: diaryVisits.visitedAtMs,
+      })
+      .from(diaryVisits)
+      .where(inArray(diaryVisits.diaryId, validIds))
+      .orderBy(desc(diaryVisits.visitedAtMs));
+
+    const result: Record<string, DiaryVisitDto[]> = {};
+    for (const r of visitRows) {
+      if (!result[r.diaryId]) {
+        result[r.diaryId] = [];
+      }
+      result[r.diaryId].push({
+        id: r.id,
+        diaryId: r.diaryId,
+        visitorName: r.visitorName,
+        message: r.message,
+        reaction: r.reaction,
+        visitedAt: Number(r.visitedAtMs) || Date.now(),
+      });
+    }
+    return result;
+  } catch (error) {
+    console.error('Failed to export diary visits map:', error);
+    throw new Error('방문자 기록 일괄 조회에 실패했습니다.', { cause: error });
+  }
+}
+
+export async function importDiaryVisitsForUser(
+  ownerUserId: number,
+  diaryId: string,
+  visits: Array<{
+    id?: string;
+    visitorName?: string;
+    message: string;
+    reaction: string;
+    visitedAt: number;
+  }>
+): Promise<{ importedCount: number; totalCount: number }> {
+  try {
+    const owned = await db
+      .select({ id: diaries.id })
+      .from(diaries)
+      .where(and(eq(diaries.id, diaryId), eq(diaries.userId, ownerUserId)))
+      .limit(1);
+
+    if (owned.length === 0) {
+      throw new Error('일기를 찾을 수 없거나 권한이 없습니다.');
+    }
+
+    if (visits.length === 0) {
+      const countRows = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(diaryVisits)
+        .where(eq(diaryVisits.diaryId, diaryId));
+      return { importedCount: 0, totalCount: Number(countRows[0]?.count) || 0 };
+    }
+
+    const existingRows = await db
+      .select({
+        id: diaryVisits.id,
+        message: diaryVisits.message,
+        visitedAtMs: diaryVisits.visitedAtMs,
+      })
+      .from(diaryVisits)
+      .where(eq(diaryVisits.diaryId, diaryId));
+
+    const existingIds = new Set(existingRows.map((r) => r.id));
+    const existingKeys = new Set(
+      existingRows.map((r) => `${r.message.trim()}__${Number(r.visitedAtMs) || 0}`)
+    );
+
+    const rowsToInsert: Array<{
+      id: string;
+      diaryId: string;
+      visitorName: string;
+      message: string;
+      reaction: string;
+      visitedAtMs: number;
+      createdAt: Date;
+    }> = [];
+
+    for (const item of visits) {
+      const visitedAtMs = Number.isFinite(item.visitedAt) && item.visitedAt > 0
+        ? Math.round(item.visitedAt)
+        : Date.now();
+      const dedupeKey = `${item.message.trim()}__${visitedAtMs}`;
+      if (existingKeys.has(dedupeKey)) {
+        continue;
+      }
+
+      const rawId = typeof item.id === 'string' ? item.id.trim().slice(0, 128) : '';
+      const candidateId =
+        rawId && !rawId.startsWith('local_visit_') && !existingIds.has(rawId)
+          ? rawId
+          : `visit_${visitedAtMs}_${Math.random().toString(36).slice(2, 8)}`;
+
+      if (existingIds.has(candidateId)) {
+        continue;
+      }
+
+      existingIds.add(candidateId);
+      existingKeys.add(dedupeKey);
+      rowsToInsert.push({
+        id: candidateId,
+        diaryId,
+        visitorName: item.visitorName || '',
+        message: item.message,
+        reaction: item.reaction,
+        visitedAtMs,
+        createdAt: new Date(visitedAtMs),
+      });
+    }
+
+    if (rowsToInsert.length > 0) {
+      await db.insert(diaryVisits).values(rowsToInsert).onConflictDoNothing({
+        target: diaryVisits.id,
+      });
+    }
+
+    const countRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(diaryVisits)
+      .where(eq(diaryVisits.diaryId, diaryId));
+
+    return {
+      importedCount: rowsToInsert.length,
+      totalCount: Number(countRows[0]?.count) || 0,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message === '일기를 찾을 수 없거나 권한이 없습니다.') {
+      throw error;
+    }
+    console.error('Failed to import diary visits:', error);
+    throw new Error('방문자 기록을 가져오지 못했습니다.', { cause: error });
   }
 }

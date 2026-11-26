@@ -6,12 +6,17 @@ import { fileURLToPath } from 'url';
 import { type AuthRequest, requireAdmin, requireAuth } from './src/middleware/auth.ts';
 import { getOrCreateUser, isBlogAdminUser } from './src/db/users.ts';
 import {
+  createDiaryVisitForDiary,
   deleteDiaryForUser,
+  deleteDiaryVisitForUser,
   getDiaryPhotoBinaryForUser,
   getDiaryPhotosListForUser,
+  getDiaryVisitsForDiary,
+  getDiaryVisitsMapForUser,
   getPublicBlogOwnerUserId,
   getServerDiaryMetaMapForUser,
   getSyncedDiariesForUser,
+  importDiaryVisitsForUser,
   includeAllDiariesInDistanceForUser,
   upsertDiaryMetadataForUser,
   upsertDiaryPhotoBinaryForUser,
@@ -33,6 +38,29 @@ function resolveServerPort(): number {
 
 const PORT = resolveServerPort();
 const MAX_PHOTO_BINARY_BYTES = 12 * 1024 * 1024; // 12MB safe upper bound for legacy & HD photos
+const ALLOWED_VISIT_REACTIONS = new Set(['👣', '❤️', '👏', '📷', '✨']);
+const visitRateBuckets = new Map<string, number[]>();
+
+function isVisitRateLimited(ipKey: string): boolean {
+  const now = Date.now();
+  const windowMs = 5 * 60 * 1000;
+  const maxRequests = 20;
+  const recent = (visitRateBuckets.get(ipKey) || []).filter((ts) => now - ts < windowMs);
+  if (recent.length >= maxRequests) {
+    visitRateBuckets.set(ipKey, recent);
+    return true;
+  }
+  recent.push(now);
+  visitRateBuckets.set(ipKey, recent);
+  if (visitRateBuckets.size > 500) {
+    for (const [k, timestamps] of visitRateBuckets.entries()) {
+      if (timestamps.every((ts) => now - ts >= windowMs)) {
+        visitRateBuckets.delete(k);
+      }
+    }
+  }
+  return false;
+}
 
 function decodeHeaderValue(val: string | string[] | undefined): string {
   const raw = Array.isArray(val) ? val[0] : val;
@@ -304,6 +332,184 @@ async function startServer() {
       res.status(500).json({ error: error?.message || '일기 삭제 실패' });
     }
   });
+
+  // Public read-only: batch export visitor records for diaries (optional ?ids=id1,id2)
+  app.get('/api/diaries/visits/export', async (req, res) => {
+    try {
+      const ownerId = await getPublicBlogOwnerUserId();
+      if (!ownerId) {
+        res.json({ visitsByDiary: {} });
+        return;
+      }
+      const idsParam =
+        typeof req.query.ids === 'string' && req.query.ids.trim()
+          ? req.query.ids
+              .split(',')
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0 && s.length <= 128)
+          : undefined;
+      const visitsByDiary = await getDiaryVisitsMapForUser(ownerId, idsParam);
+      res.json({ visitsByDiary });
+    } catch (error: any) {
+      console.error('GET /api/diaries/visits/export failed:', error);
+      res.status(500).json({ error: error?.message || '방문자 기록 일괄 조회 실패' });
+    }
+  });
+
+  // Public read-only: list visitor records for a diary
+  app.get('/api/diaries/:diaryId/visits', async (req, res) => {
+    try {
+      const diaryId = String(req.params.diaryId || '').trim();
+      if (!diaryId || diaryId.length > 128) {
+        res.status(400).json({ error: '유효하지 않은 일기 ID입니다.' });
+        return;
+      }
+      const ownerId = await getPublicBlogOwnerUserId();
+      if (!ownerId) {
+        res.json({ visits: [] });
+        return;
+      }
+      const visits = await getDiaryVisitsForDiary(ownerId, diaryId);
+      res.json({ visits });
+    } catch (error: any) {
+      console.error('GET /api/diaries/:diaryId/visits failed:', error);
+      res.status(500).json({ error: error?.message || '방문자 기록 조회 실패' });
+    }
+  });
+
+  // Public: leave a visitor record on a published diary
+  app.post('/api/diaries/:diaryId/visits', async (req, res) => {
+    try {
+      const diaryId = String(req.params.diaryId || '').trim();
+      if (!diaryId || diaryId.length > 128) {
+        res.status(400).json({ error: '유효하지 않은 일기 ID입니다.' });
+        return;
+      }
+
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
+        .split(',')[0]
+        .trim();
+      if (isVisitRateLimited(clientIp)) {
+        res.status(429).json({ error: '잠시 후 다시 시도해 주세요.' });
+        return;
+      }
+
+      const safeName =
+        typeof req.body?.visitorName === 'string'
+          ? req.body.visitorName.trim().slice(0, 40)
+          : '';
+      const rawMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      const rawReaction = typeof req.body?.reaction === 'string' ? req.body.reaction.trim() : '👣';
+
+      if (!rawMessage || rawMessage.length > 300) {
+        res.status(400).json({ error: '방문 메시지는 1~300자 이내로 입력해 주세요.' });
+        return;
+      }
+
+      const safeReaction = ALLOWED_VISIT_REACTIONS.has(rawReaction) ? rawReaction : '👣';
+      const ownerId = await getPublicBlogOwnerUserId();
+      if (!ownerId) {
+        res.status(404).json({ error: '일기를 찾을 수 없습니다.' });
+        return;
+      }
+
+      const visit = await createDiaryVisitForDiary(ownerId, diaryId, {
+        visitorName: safeName,
+        message: rawMessage,
+        reaction: safeReaction,
+      });
+
+      if (!visit) {
+        res.status(404).json({ error: '서버에 등록된 일기를 찾을 수 없습니다.' });
+        return;
+      }
+
+      res.status(201).json({ visit });
+    } catch (error: any) {
+      console.error('POST /api/diaries/:diaryId/visits failed:', error);
+      res.status(500).json({ error: error?.message || '방문자 기록 저장 실패' });
+    }
+  });
+
+  // Admin-only: batch import visitor records (e.g., from JSON backup) onto a server diary
+  app.post(
+    '/api/diaries/:diaryId/visits/import',
+    requireAuth,
+    requireAdmin,
+    async (req: AuthRequest, res) => {
+      try {
+        const uid = req.user?.uid;
+        if (!uid) {
+          res.status(401).json({ error: '인증 정보가 없습니다.' });
+          return;
+        }
+        const diaryId = String(req.params.diaryId || '').trim();
+        if (!diaryId || diaryId.length > 128) {
+          res.status(400).json({ error: '유효하지 않은 일기 ID입니다.' });
+          return;
+        }
+        const rawList = Array.isArray(req.body?.visits) ? req.body.visits : [];
+        if (rawList.length > 500) {
+          res.status(400).json({ error: '한 번에 최대 500개의 방문 기록만 가져올 수 있습니다.' });
+          return;
+        }
+
+        const sanitized = rawList
+          .map((item: any) => {
+            const message = typeof item?.message === 'string' ? item.message.trim().slice(0, 300) : '';
+            if (!message) return null;
+            const rawReaction = typeof item?.reaction === 'string' ? item.reaction.trim() : '👣';
+            const visitedAtNum = Number(item?.visitedAt);
+            return {
+              id: typeof item?.id === 'string' ? item.id.trim().slice(0, 128) : undefined,
+              visitorName:
+                typeof item?.visitorName === 'string' ? item.visitorName.trim().slice(0, 40) : '',
+              message,
+              reaction: ALLOWED_VISIT_REACTIONS.has(rawReaction) ? rawReaction : '👣',
+              visitedAt:
+                Number.isFinite(visitedAtNum) && visitedAtNum > 0 ? Math.round(visitedAtNum) : Date.now(),
+            };
+          })
+          .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+        const dbUser = await getOrCreateUser(uid, req.user?.email || '');
+        const result = await importDiaryVisitsForUser(dbUser.id, diaryId, sanitized);
+        res.json({ ok: true, ...result });
+      } catch (error: any) {
+        console.error('POST /api/diaries/:diaryId/visits/import failed:', error);
+        const status = error?.message === '일기를 찾을 수 없거나 권한이 없습니다.' ? 404 : 500;
+        res.status(status).json({ error: error?.message || '방문자 기록 가져오기 실패' });
+      }
+    }
+  );
+
+  // Admin-only: delete a visitor record from a diary
+  app.delete(
+    '/api/diaries/:diaryId/visits/:visitId',
+    requireAuth,
+    requireAdmin,
+    async (req: AuthRequest, res) => {
+      try {
+        const uid = req.user?.uid;
+        if (!uid) {
+          res.status(401).json({ error: '인증 정보가 없습니다.' });
+          return;
+        }
+        const diaryId = String(req.params.diaryId || '').trim();
+        const visitId = String(req.params.visitId || '').trim();
+        if (!diaryId || !visitId) {
+          res.status(400).json({ error: '유효하지 않은 요청입니다.' });
+          return;
+        }
+        const dbUser = await getOrCreateUser(uid, req.user?.email || '');
+        const deleted = await deleteDiaryVisitForUser(dbUser.id, diaryId, visitId);
+        res.json({ ok: true, deleted });
+      } catch (error: any) {
+        console.error('DELETE /api/diaries/:diaryId/visits/:visitId failed:', error);
+        res.status(500).json({ error: error?.message || '방문자 기록 삭제 실패' });
+      }
+    }
+  );
 
   const distDir = path.resolve(__dirname, 'dist');
   const hasBuiltDist = fs.existsSync(path.join(distDir, 'index.html'));

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { DiaryEntry } from '../types';
+import { DiaryEntry, ExportedDiaryEntry } from '../types';
 import { 
   ExportMode, 
   ExportOptions, 
@@ -21,11 +21,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Trash2,
   CloudUpload,
   Route
 } from 'lucide-react';
-import { wipeLegacyFirestoreDiaries } from '../services/legacyFirestoreCleanup';
 
 interface DataManagementModalProps {
   isOpen: boolean;
@@ -38,7 +36,9 @@ interface DataManagementModalProps {
   ) => Promise<{ uploaded: number; skipped: number; failed: number }>;
   onIncludeAllInDistance?: () => Promise<{ localUpdated: number; serverUpdated: number }>;
   onExport: (options: ExportOptions) => Promise<{ count: number; success: boolean }>;
-  onImport: (importedDiaries: DiaryEntry[]) => Promise<{ addedCount: number; updatedCount: number; total: number }>;
+  onImport: (
+    importedDiaries: ExportedDiaryEntry[]
+  ) => Promise<{ addedCount: number; updatedCount: number; total: number; importedVisitsCount?: number }>;
   onResetLocalDb?: () => void;
 }
 
@@ -73,12 +73,6 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
     message: string;
     error?: boolean;
   }>({ running: false, message: '' });
-  const [legacyWipeState, setLegacyWipeState] = useState<{
-    confirming: boolean;
-    running: boolean;
-    message: string;
-    error?: boolean;
-  }>({ confirming: false, running: false, message: '' });
   const [confirmLocalReset, setConfirmLocalReset] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,7 +95,6 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
       setImportStatus({ type: 'idle', message: '' });
       setBatchUploadState({ running: false, message: '' });
       setIncludeAllState({ running: false, message: '' });
-      setLegacyWipeState({ confirming: false, running: false, message: '' });
       setConfirmLocalReset(false);
       const d = new Date();
       d.setDate(d.getDate() - 5);
@@ -174,23 +167,34 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
       });
 
       const parsed = JSON.parse(content);
-      if (!Array.isArray(parsed)) {
+      const rawArray = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.diaries)
+          ? parsed.diaries
+          : null;
+      if (!rawArray) {
         throw new Error('유효한 일기 데이터 형식이 아닙니다. (배열 형태여야 함)');
       }
 
       // Basic structure validation
-      const validEntries = parsed.filter(item => item.id && item.title && item.date);
+      const validEntries = rawArray.filter(
+        (item: any) => item && typeof item === 'object' && item.id && item.date
+      ) as ExportedDiaryEntry[];
       if (validEntries.length === 0) {
         throw new Error('가져올 수 있는 유효한 일기 항목이 없습니다.');
       }
 
-      setImportStatus({ type: 'loading', message: `${validEntries.length}개의 일기를 로컬 데이터베이스에 저장 중...` });
+      setImportStatus({ type: 'loading', message: `${validEntries.length}개의 일기와 방문기록을 저장 중...` });
       
       const result = await onImport(validEntries);
+      const visitsText =
+        result.importedVisitsCount && result.importedVisitsCount > 0
+          ? `, 방문기록 ${result.importedVisitsCount}개 반영`
+          : '';
       
       setImportStatus({ 
         type: 'success', 
-        message: `가져오기 성공: 신규 ${result.addedCount}개 추가, ${result.updatedCount}개 업데이트 완료.` 
+        message: `가져오기 성공: 신규 ${result.addedCount}개 추가, ${result.updatedCount}개 업데이트${visitsText} 완료.` 
       });
       
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -243,31 +247,6 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
       setIncludeAllState({
         running: false,
         message: err?.message || '누적거리 포함 일괄 적용 중 오류가 발생했습니다.',
-        error: true,
-      });
-    }
-  };
-
-  const handleWipeLegacyFirestore = async () => {
-    if (legacyWipeState.running) return;
-    setLegacyWipeState({ confirming: false, running: true, message: '기존 Firestore 데이터 삭제 중...', error: false });
-    try {
-      const res = await wipeLegacyFirestoreDiaries();
-      setLegacyWipeState({
-        confirming: false,
-        running: false,
-        message: `기존 Firestore 정리 완료 (일기 ${res.deletedDiaries}개, 사진 ${res.deletedPhotos}개 삭제)`,
-        error: false,
-      });
-    } catch (err: any) {
-      const msg = err?.message || String(err);
-      const isQuota = msg.includes('resource-exhausted') || msg.includes('Quota');
-      setLegacyWipeState({
-        confirming: false,
-        running: false,
-        message: isQuota
-          ? '오늘 Firestore 무료 할당량이 초과되어 내일 초기화 후 다시 실행하거나 Firebase 콘솔에서 삭제해 주세요.'
-          : `삭제 실패: ${msg}`,
         error: true,
       });
     }
@@ -369,7 +348,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                       {allCount}개
                     </span>
                   </div>
-                  <p className="text-xs text-stone-400 mt-1">현재 보관 중인 전체 여행일기를 모두 다운로드합니다.</p>
+                  <p className="text-xs text-stone-400 mt-1">현재 보관 중인 전체 여행일기와 방문기록을 모두 다운로드합니다.</p>
                 </div>
               </div>
 
@@ -444,7 +423,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                 <div>
                   <h4 className="text-sm font-bold text-white">JSON 파일 가져오기</h4>
                   <p className="text-xs text-stone-400 mt-1 max-w-[260px] mx-auto">
-                    백업된 일기 JSON 파일을 선택하여 로컬 저장소(IndexedDB)에 저장합니다.
+                    백업된 일기 JSON 파일(방문기록 포함)을 선택하여 저장소에 복원합니다.
                   </p>
                 </div>
                 
@@ -601,50 +580,6 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                       현재 브라우저에서 IndexedDB 영구 저장이 차단되어 있습니다. 시크릿 모드를 해제하고 일반 브라우저 모드를 사용해주세요.
                     </p>
                   </div>
-                )}
-              </div>
-
-              {/* Legacy Firestore cleanup */}
-              <div className="p-4 rounded-xl bg-stone-800/40 border border-stone-700/60 space-y-2.5">
-                <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
-                  <Trash2 className="w-4 h-4 text-amber-400" />
-                  기존 Firestore 잔여 데이터 삭제
-                </div>
-                <p className="text-[11px] text-stone-400 leading-relaxed">
-                  이전 서버 DB(Firestore)에 남아 있는 문서를 삭제합니다. (무료 일일 할당량 초과 시 내일 초기화 후 실행 가능합니다.)
-                </p>
-                {legacyWipeState.confirming ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleWipeLegacyFirestore}
-                      className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer"
-                    >
-                      확인: 기존 Firestore 데이터 삭제
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLegacyWipeState((s) => ({ ...s, confirming: false }))}
-                      className="px-3 py-1.5 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs font-semibold transition cursor-pointer"
-                    >
-                      취소
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={legacyWipeState.running}
-                    onClick={() => setLegacyWipeState({ confirming: true, running: false, message: '' })}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs font-bold border border-stone-600 transition cursor-pointer disabled:opacity-50"
-                  >
-                    {legacyWipeState.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                    <span>기존 Firestore 데이터 삭제</span>
-                  </button>
-                )}
-                {legacyWipeState.message && (
-                  <p className={`text-[11px] font-medium ${legacyWipeState.error ? 'text-rose-300' : 'text-emerald-300'}`}>
-                    {legacyWipeState.message}
-                  </p>
                 )}
               </div>
 

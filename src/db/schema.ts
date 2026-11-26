@@ -86,6 +86,18 @@ export const diaryPhotos = pgTable('diary_photos', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const diaryVisits = pgTable('diary_visits', {
+  id: text('id').primaryKey(),
+  diaryId: text('diary_id')
+    .references(() => diaries.id, { onDelete: 'cascade' })
+    .notNull(),
+  visitorName: text('visitor_name').notNull(),
+  message: text('message').notNull().default(''),
+  reaction: text('reaction').notNull().default('👣'),
+  visitedAtMs: bigint('visited_at_ms', { mode: 'number' }).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   diaries: many(diaries),
 }));
@@ -96,6 +108,7 @@ export const diariesRelations = relations(diaries, ({ one, many }) => ({
     references: [users.id],
   }),
   photos: many(diaryPhotos),
+  visits: many(diaryVisits),
 }));
 
 export const diaryPhotosRelations = relations(diaryPhotos, ({ one }) => ({
@@ -106,5 +119,12 @@ export const diaryPhotosRelations = relations(diaryPhotos, ({ one }) => ({
   author: one(users, {
     fields: [diaryPhotos.userId],
     references: [users.id],
+  }),
+}));
+
+export const diaryVisitsRelations = relations(diaryVisits, ({ one }) => ({
+  diary: one(diaries, {
+    fields: [diaryVisits.diaryId],
+    references: [diaries.id],
   }),
 }));

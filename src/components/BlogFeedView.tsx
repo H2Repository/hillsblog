@@ -28,10 +28,11 @@ import {
   Loader2,
   CloudOff,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  Footprints
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getDiaryServerStatus, ServerDiaryMeta } from '../services/diaryCloudSql';
+import { getDiaryServerStatus, getLocalVisitCountMap, ServerDiaryMeta } from '../services/diaryCloudSql';
 import { sortDiariesChronological, useRoadDistances } from '../services/roadDistanceService';
 import { filterValidPhotos } from '../utils/storage';
 import { useDisplayImageUrl } from '../utils/imageDisplay';
@@ -69,6 +70,8 @@ interface BlogFeedViewProps {
   isOffline?: boolean;
   onUploadDiaryToServer: (diary: DiaryEntry) => void;
   onSelectDiary: (diary: DiaryEntry) => void;
+  onSelectDiaryVisits?: (diary: DiaryEntry) => void;
+  visitSyncVersion?: number;
   onEditDiary: (diary: DiaryEntry) => void;
   onDeleteDiary: (diary: DiaryEntry) => void;
   onViewOnMap: (diary: DiaryEntry) => void;
@@ -84,6 +87,8 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
   isOffline = false,
   onUploadDiaryToServer,
   onSelectDiary,
+  onSelectDiaryVisits,
+  visitSyncVersion = 0,
   onEditDiary,
   onDeleteDiary,
   onViewOnMap,
@@ -99,6 +104,7 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
 
   const allLabel = t('filterAll');
   const translationVersion = useTranslationVersion();
+  const localVisitCountMap = useMemo(() => getLocalVisitCountMap(), [diaries, serverMetaMap, visitSyncVersion]);
 
   // Localize diaries according to active language
   const localizedDiaries = useMemo(() => {
@@ -568,6 +574,32 @@ export const BlogFeedView: React.FC<BlogFeedViewProps> = ({
                                 : t('syncStatusSynced')}
                         </span>
                       </button>
+
+                      {/* Visitor Footprints Count Button */}
+                      {(() => {
+                        const visitCount =
+                          (serverMetaMap[originalDiary.id]?.visitCount ?? 0) +
+                          (localVisitCountMap[originalDiary.id] ?? 0);
+                        return (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onSelectDiaryVisits) {
+                                onSelectDiaryVisits(originalDiary);
+                              } else {
+                                onSelectDiary(originalDiary);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-stone-200 bg-stone-50 hover:bg-amber-50 hover:border-amber-300 text-[11px] font-semibold text-stone-600 hover:text-amber-800 transition cursor-pointer"
+                            title={t('visitCardTooltip', { count: visitCount })}
+                            aria-label={t('visitCardTooltip', { count: visitCount })}
+                          >
+                            <Footprints className="w-3.5 h-3.5 text-amber-600" />
+                            <span>{visitCount}</span>
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     <button

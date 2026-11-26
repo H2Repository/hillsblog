@@ -51,4 +51,17 @@ export interface DiaryEntry {
   localSyncStatus?: 'synced' | 'needs_update' | 'not_on_server';
 }
 
+export interface DiaryVisitRecord {
+  id: string;
+  diaryId: string;
+  visitorName?: string;
+  message: string;
+  reaction: string;
+  visitedAt: number;
+}
+
+export interface ExportedDiaryEntry extends DiaryEntry {
+  visits?: DiaryVisitRecord[];
+}
+
 export type ViewMode = 'blog' | 'map' | 'timeline';

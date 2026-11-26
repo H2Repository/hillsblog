@@ -42,18 +42,22 @@ import {
   clearServerSyncCaches,
   findMatchingServerMeta,
   flushPendingDeletesToServer,
+  fetchVisitsMapForExport,
   getCachedServerMetaMap,
   getDiaryServerStatus,
   getPendingServerDeleteIds,
   hasCompletedServerIncludeAllMigration,
   hydrateDiaryPhotosFromServer,
+  importDiaryVisitsToServer,
   includeAllServerDiariesInDistance,
   loadDurablePendingServerDeleteIds,
   markServerIncludeAllMigrationDone,
   migrateLocalDiariesIncludeAllDistance,
   removePendingServerDeleteIds,
   restoreDurableSyncCachesFromIdb,
+  sanitizeImportedVisits,
   saveCachedServerMetaMap,
+  saveImportedVisitsLocally,
   savePendingServerDeleteIds,
   syncMissingAndUpdatedFromServer,
   upsertDiaryToServer,
@@ -381,7 +385,10 @@ export default function App() {
             await deleteLocalDiary(originalId).catch(() => {});
           }
           await saveLocalDiary(updatedDiary);
-          nextMetaMap[meta.id] = meta;
+          nextMetaMap[meta.id] = {
+            ...meta,
+            visitCount: nextMetaMap[meta.id]?.visitCount ?? meta.visitCount,
+          };
           failedAutoPushCooldownRef.current.delete(originalId);
           uploaded++;
         } catch (err) {
@@ -720,6 +727,8 @@ export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingDiary, setEditingDiary] = useState<DiaryEntry | null>(null);
   const [selectedDiary, setSelectedDiary] = useState<DiaryEntry | null>(null);
+  const [openDetailAtVisits, setOpenDetailAtVisits] = useState(false);
+  const [visitSyncVersion, setVisitSyncVersion] = useState(0);
   const [focusedMapDiaryId, setFocusedMapDiaryId] = useState<string | null>(null);
 
   // Translation
@@ -876,8 +885,9 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  const handleSelectDiary = async (diary: DiaryEntry) => {
+  const handleSelectDiary = async (diary: DiaryEntry, options?: { scrollToVisits?: boolean }) => {
     const original = diaries.find((item) => item.id === diary.id) || diary;
+    setOpenDetailAtVisits(Boolean(options?.scrollToVisits));
     setSelectedDiary(original);
 
     // If this diary exists on server and has deferred/missing HD photos, re-hydrate on demand
@@ -1017,7 +1027,13 @@ export default function App() {
       }
 
       setServerMetaMap((prev) => {
-        const next = { ...prev, [meta.id]: meta };
+        const next = {
+          ...prev,
+          [meta.id]: {
+            ...meta,
+            visitCount: prev[meta.id]?.visitCount ?? meta.visitCount,
+          },
+        };
         saveCachedServerMetaMap(next);
         return next;
       });
@@ -1342,9 +1358,18 @@ export default function App() {
       }
     }
 
-    const result = await exportDiariesWithOptions(sourceDiaries, options);
+    const matchedIds = matched.map((d) => d.id);
+    const visitsByDiary = matchedIds.length > 0
+      ? await fetchVisitsMapForExport(matchedIds).catch(() => ({}))
+      : {};
+
+    const result = await exportDiariesWithOptions(sourceDiaries, options, visitsByDiary);
     if (result.count > 0) {
-      setToastMessage({ text: `${result.count}개의 일기 JSON 다운로드 완료 (${result.fileName})`, type: 'success' });
+      const visitsSummary = result.visitCount > 0 ? `, 방문기록 ${result.visitCount}개 포함` : '';
+      setToastMessage({
+        text: `${result.count}개의 일기${visitsSummary} JSON 다운로드 완료 (${result.fileName})`,
+        type: 'success',
+      });
     } else {
       setToastMessage({ text: '선택한 조건에 해당하는 일기가 없습니다 (0개)', type: 'info' });
     }
@@ -1412,7 +1437,9 @@ export default function App() {
             isInitialSyncing={isInitialSyncing}
             isOffline={!isServerOnline}
             onUploadDiaryToServer={handleUploadDiaryToServer}
-            onSelectDiary={handleSelectDiary}
+            onSelectDiary={(d) => handleSelectDiary(d)}
+            onSelectDiaryVisits={(d) => handleSelectDiary(d, { scrollToVisits: true })}
+            visitSyncVersion={visitSyncVersion}
             onEditDiary={handleOpenEditDiary}
             onDeleteDiary={handleRequestDeleteDiary}
             onViewOnMap={(d) => { setFocusedMapDiaryId(d.id); setViewMode('map'); }}
@@ -1450,14 +1477,38 @@ export default function App() {
       <DiaryDetailModal
         isOpen={!!selectedDiary}
         diary={selectedDiary}
-        onClose={() => setSelectedDiary(null)}
-        onEdit={(d) => { setSelectedDiary(null); handleOpenEditDiary(d); }}
+        onClose={() => { setSelectedDiary(null); setOpenDetailAtVisits(false); }}
+        onEdit={(d) => { setSelectedDiary(null); setOpenDetailAtVisits(false); handleOpenEditDiary(d); }}
         onDelete={(d) => handleRequestDeleteDiary(d)}
         onViewOnMap={(d) => { setFocusedMapDiaryId(d.id); setViewMode('map'); }}
         onOpenPhotoLightbox={(photos, index) => { setLightboxPhotos(photos); setLightboxIndex(index); setIsLightboxOpen(true); }}
         serverStatus={selectedDiary ? getDiaryServerStatus(selectedDiary, serverMetaMap, hasLoadedServerMeta) : 'not_on_server'}
         isUploadingToServer={selectedDiary ? Boolean(uploadingDiaryIds[selectedDiary.id]) : false}
         onUploadToServer={handleUploadDiaryToServer}
+        initialScrollToVisits={openDetailAtVisits}
+        onVisitsUpdated={(diaryId, totalCount) => {
+          setVisitSyncVersion((v) => v + 1);
+          setServerMetaMap((prev) => {
+            if (!prev[diaryId]) return prev;
+            const localOnlyCount = (() => {
+              try {
+                const raw = localStorage.getItem('hills_diary_local_visits_v1');
+                const parsed = raw ? JSON.parse(raw) : {};
+                return Array.isArray(parsed?.[diaryId]) ? parsed[diaryId].length : 0;
+              } catch {
+                return 0;
+              }
+            })();
+            const serverCount = Math.max(0, totalCount - localOnlyCount);
+            if (prev[diaryId].visitCount === serverCount) return prev;
+            const next = {
+              ...prev,
+              [diaryId]: { ...prev[diaryId], visitCount: serverCount },
+            };
+            saveCachedServerMetaMap(next);
+            return next;
+          });
+        }}
         onNextDiary={() => {
           const idx = diaries.findIndex(d => d.id === selectedDiary?.id);
           if (idx < diaries.length - 1) setSelectedDiary(diaries[idx + 1]);
@@ -1524,9 +1575,12 @@ export default function App() {
         onImport={async (importedDiaries) => {
           let addedCount = 0;
           let updatedCount = 0;
+          let importedVisitsCount = 0;
           const toSave: DiaryEntry[] = [];
+          const visitsToRestore: Array<{ diaryId: string; visits: ReturnType<typeof sanitizeImportedVisits>; isOnServer: boolean }> = [];
 
-          for (const item of importedDiaries) {
+          for (const rawItem of importedDiaries) {
+            const { visits: rawVisits, ...item } = rawItem;
             const matchedServer = findMatchingServerMeta(item, serverMetaMap);
             const normalized: DiaryEntry = {
               ...item,
@@ -1541,16 +1595,30 @@ export default function App() {
             };
 
             const existing = diaries.find((d) => isDiaryDuplicate(d, normalized));
+            let diarySkipped = false;
             if (existing) {
-              if ((existing.updatedAt || 0) > (normalized.updatedAt || 0) && !diaryNeedsPhotoHydration(existing)) {
-                continue;
-              }
               normalized.id = existing.id;
-              updatedCount++;
+              if ((existing.updatedAt || 0) > (normalized.updatedAt || 0) && !diaryNeedsPhotoHydration(existing)) {
+                diarySkipped = true;
+              } else {
+                updatedCount++;
+              }
             } else {
               addedCount++;
             }
-            toSave.push(normalized);
+
+            if (!diarySkipped) {
+              toSave.push(normalized);
+            }
+
+            const cleanedVisits = sanitizeImportedVisits(normalized.id, rawVisits);
+            if (cleanedVisits.length > 0) {
+              visitsToRestore.push({
+                diaryId: normalized.id,
+                visits: cleanedVisits,
+                isOnServer: Boolean(matchedServer || serverMetaMap[normalized.id]),
+              });
+            }
           }
 
           if (toSave.length > 0) {
@@ -1561,7 +1629,33 @@ export default function App() {
             setDiaries(finalList);
           }
 
-          return { addedCount, updatedCount, total: toSave.length };
+          if (visitsToRestore.length > 0) {
+            const canImportToServer =
+              isAdminRef.current && (typeof navigator === 'undefined' || navigator.onLine);
+
+            for (const entry of visitsToRestore) {
+              if (entry.isOnServer && canImportToServer) {
+                try {
+                  const res = await importDiaryVisitsToServer(entry.diaryId, entry.visits, getIdToken);
+                  importedVisitsCount += res.importedCount;
+                  setServerMetaMap((prev) => {
+                    if (!prev[entry.diaryId]) return prev;
+                    const next = {
+                      ...prev,
+                      [entry.diaryId]: { ...prev[entry.diaryId], visitCount: res.totalCount },
+                    };
+                    saveCachedServerMetaMap(next);
+                    return next;
+                  });
+                  continue;
+                } catch {}
+              }
+              importedVisitsCount += saveImportedVisitsLocally(entry.diaryId, entry.visits);
+            }
+            setVisitSyncVersion((v) => v + 1);
+          }
+
+          return { addedCount, updatedCount, total: toSave.length, importedVisitsCount };
         }}
         onResetLocalDb={async () => {
           try {

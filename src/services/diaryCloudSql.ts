@@ -1,4 +1,4 @@
-import { DiaryEntry, TravelPhoto } from '../types';
+import { DiaryEntry, DiaryVisitRecord, TravelPhoto } from '../types';
 import { createThumbnail } from '../utils/imageCompressor';
 import {
   deleteLocalDiary,
@@ -26,6 +26,7 @@ export interface ServerDiaryMeta {
   hasSubcollectionPhotos?: boolean;
   includeInDistance?: boolean;
   photoSigs?: Record<string, string>;
+  visitCount?: number;
 }
 
 interface ServerSyncState {
@@ -111,6 +112,7 @@ export function saveCachedServerMetaMap(metaMap: Record<string, ServerDiaryMeta>
           ...(v.includeInDistance !== undefined
             ? { includeInDistance: v.includeInDistance }
             : {}),
+          ...(v.visitCount !== undefined ? { visitCount: v.visitCount } : {}),
         };
       }
       localStorage.setItem(SERVER_META_CACHE_KEY, JSON.stringify(stripped));
@@ -502,6 +504,18 @@ export async function upsertDiaryToServer(
     }
   }
 
+  let flushedVisitCount: number | undefined;
+  const pendingLocalVisits = getLocalVisitsForDiary(diary.id);
+  if (pendingLocalVisits.length > 0) {
+    try {
+      const importRes = await importDiaryVisitsToServer(diary.id, pendingLocalVisits, getIdToken);
+      flushedVisitCount = importRes.totalCount;
+      clearLocalVisitsForDiary(diary.id);
+    } catch (visitErr) {
+      console.warn(`Pending local visits flush skipped for ${diary.id}:`, visitErr);
+    }
+  }
+
   const updatedDiary: DiaryEntry = {
     ...diary,
     updatedAt: nowTs,
@@ -521,6 +535,7 @@ export async function upsertDiaryToServer(
     hasSubcollectionPhotos: updatedDiary.hasSubcollectionPhotos,
     includeInDistance: updatedDiary.includeInDistance ?? updatedDiary.location?.includeInDistance ?? true,
     photoSigs: finalSigs,
+    ...(flushedVisitCount !== undefined ? { visitCount: flushedVisitCount } : {}),
   };
 
   return { updatedDiary, meta: serverMeta };
@@ -1021,3 +1036,326 @@ export async function flushPendingDeletesToServer(
 
   return { deletedIds, failedIds, authRequired };
 }
+
+const LOCAL_DIARY_VISITS_KEY = 'hills_diary_local_visits_v1';
+const ALLOWED_VISIT_REACTIONS = new Set(['👣', '❤️', '👏', '📷', '✨']);
+
+function readAllLocalVisitsMap(): Record<string, DiaryVisitRecord[]> {
+  try {
+    const raw = localStorage.getItem(LOCAL_DIARY_VISITS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, DiaryVisitRecord[]>;
+    }
+  } catch {}
+  return {};
+}
+
+function writeAllLocalVisitsMap(map: Record<string, DiaryVisitRecord[]>): void {
+  try {
+    localStorage.setItem(LOCAL_DIARY_VISITS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+export function getLocalVisitsForDiary(diaryId: string): DiaryVisitRecord[] {
+  const map = readAllLocalVisitsMap();
+  const list = map[diaryId];
+  return Array.isArray(list) ? list : [];
+}
+
+export function getLocalVisitCountMap(): Record<string, number> {
+  const map = readAllLocalVisitsMap();
+  const counts: Record<string, number> = {};
+  for (const [id, list] of Object.entries(map)) {
+    if (Array.isArray(list) && list.length > 0) {
+      counts[id] = list.length;
+    }
+  }
+  return counts;
+}
+
+export function clearLocalVisitsForDiary(diaryId: string): void {
+  const map = readAllLocalVisitsMap();
+  if (map[diaryId]) {
+    delete map[diaryId];
+    writeAllLocalVisitsMap(map);
+  }
+}
+
+export function sanitizeImportedVisits(diaryId: string, rawVisits: unknown): DiaryVisitRecord[] {
+  if (!Array.isArray(rawVisits)) return [];
+  const cleaned: DiaryVisitRecord[] = [];
+  for (let i = 0; i < rawVisits.length; i++) {
+    const raw = rawVisits[i] as any;
+    if (!raw || typeof raw !== 'object') continue;
+    const message = typeof raw.message === 'string' ? raw.message.trim().slice(0, 300) : '';
+    if (!message) continue;
+    const rawReaction = typeof raw.reaction === 'string' ? raw.reaction.trim() : '👣';
+    const reaction = ALLOWED_VISIT_REACTIONS.has(rawReaction) ? rawReaction : '👣';
+    const visitorName = typeof raw.visitorName === 'string' ? raw.visitorName.trim().slice(0, 40) : '';
+    const visitedAtRaw = Number(raw.visitedAt);
+    const visitedAt = Number.isFinite(visitedAtRaw) && visitedAtRaw > 0 ? Math.round(visitedAtRaw) : Date.now();
+    const rawId = typeof raw.id === 'string' ? raw.id.trim().slice(0, 128) : '';
+    const id = rawId || `local_visit_${visitedAt}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+    cleaned.push({
+      id,
+      diaryId,
+      visitorName,
+      message,
+      reaction,
+      visitedAt,
+    });
+  }
+  return cleaned;
+}
+
+export function saveImportedVisitsLocally(
+  diaryId: string,
+  importedVisits: DiaryVisitRecord[]
+): number {
+  if (importedVisits.length === 0) return 0;
+  const map = readAllLocalVisitsMap();
+  const existing = Array.isArray(map[diaryId]) ? map[diaryId] : [];
+  const seenIds = new Set(existing.map((v) => v.id));
+  const seenKeys = new Set(existing.map((v) => `${v.message.trim()}__${v.visitedAt}`));
+
+  const toAdd: DiaryVisitRecord[] = [];
+  for (const item of importedVisits) {
+    const key = `${item.message.trim()}__${item.visitedAt}`;
+    if (seenIds.has(item.id) || seenKeys.has(key)) continue;
+    seenIds.add(item.id);
+    seenKeys.add(key);
+    toAdd.push({ ...item, diaryId });
+  }
+
+  if (toAdd.length === 0) return 0;
+  map[diaryId] = [...toAdd, ...existing]
+    .sort((a, b) => (b.visitedAt || 0) - (a.visitedAt || 0))
+    .slice(0, 500);
+  writeAllLocalVisitsMap(map);
+  return toAdd.length;
+}
+
+export async function fetchVisitsMapForExport(
+  diaryIds?: string[]
+): Promise<Record<string, DiaryVisitRecord[]>> {
+  const localMap = readAllLocalVisitsMap();
+  const result: Record<string, DiaryVisitRecord[]> = {};
+
+  const targetIds = diaryIds && diaryIds.length > 0 ? diaryIds : Object.keys(localMap);
+  for (const id of targetIds) {
+    if (Array.isArray(localMap[id]) && localMap[id].length > 0) {
+      result[id] = [...localMap[id]];
+    }
+  }
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return result;
+  }
+
+  try {
+    const query =
+      diaryIds && diaryIds.length > 0 && diaryIds.length <= 100
+        ? `?ids=${encodeURIComponent(diaryIds.join(','))}`
+        : '';
+    const res = await fetch(`/api/diaries/visits/export${query}`, { cache: 'no-store' });
+    if (!res.ok) return result;
+
+    const data = (await res.json()) as { visitsByDiary?: Record<string, DiaryVisitRecord[]> };
+    const serverMap = data.visitsByDiary || {};
+
+    const allIds = new Set([...Object.keys(result), ...Object.keys(serverMap)]);
+    for (const id of allIds) {
+      const serverList = Array.isArray(serverMap[id]) ? serverMap[id] : [];
+      const localList = Array.isArray(result[id]) ? result[id] : [];
+      const seenKeys = new Set<string>();
+      const deduped: DiaryVisitRecord[] = [];
+      for (const v of mergeVisitsNewestFirst(serverList, localList)) {
+        const key = `${(v.message || '').trim()}__${v.visitedAt || 0}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        deduped.push(v);
+      }
+      if (deduped.length > 0) {
+        result[id] = deduped;
+      }
+    }
+  } catch {}
+
+  return result;
+}
+
+export async function importDiaryVisitsToServer(
+  diaryId: string,
+  visits: DiaryVisitRecord[],
+  getIdToken: IdTokenGetter
+): Promise<{ importedCount: number; totalCount: number }> {
+  const res = await fetchWithAuth(
+    `/api/diaries/${encodeURIComponent(diaryId)}/visits/import`,
+    getIdToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visits }),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(await parseErrorResponse(res, '방문자 기록 서버 가져오기 실패'));
+  }
+  const data = (await res.json()) as { importedCount?: number; totalCount?: number };
+  return {
+    importedCount: Number(data.importedCount) || 0,
+    totalCount: Number(data.totalCount) || 0,
+  };
+}
+
+function mergeVisitsNewestFirst(
+  serverVisits: DiaryVisitRecord[],
+  localVisits: DiaryVisitRecord[]
+): DiaryVisitRecord[] {
+  const seen = new Set<string>();
+  const seenKeys = new Set<string>();
+  const merged: DiaryVisitRecord[] = [];
+  for (const item of [...serverVisits, ...localVisits]) {
+    if (!item?.id || seen.has(item.id)) continue;
+    const key = `${(item.message || '').trim()}__${item.visitedAt || 0}`;
+    if (seenKeys.has(key)) continue;
+    seen.add(item.id);
+    seenKeys.add(key);
+    merged.push(item);
+  }
+  return merged.sort((a, b) => (b.visitedAt || 0) - (a.visitedAt || 0));
+}
+
+export async function fetchDiaryVisits(
+  diaryId: string
+): Promise<{ visits: DiaryVisitRecord[]; fromServer: boolean }> {
+  const localVisits = getLocalVisitsForDiary(diaryId);
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return {
+      visits: mergeVisitsNewestFirst([], localVisits),
+      fromServer: false,
+    };
+  }
+  try {
+    const res = await fetch(`/api/diaries/${encodeURIComponent(diaryId)}/visits`, {
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      return {
+        visits: mergeVisitsNewestFirst([], localVisits),
+        fromServer: false,
+      };
+    }
+    const data = (await res.json()) as { visits?: DiaryVisitRecord[] };
+    const serverVisits = Array.isArray(data.visits) ? data.visits : [];
+    return {
+      visits: mergeVisitsNewestFirst(serverVisits, localVisits),
+      fromServer: true,
+    };
+  } catch {
+    return {
+      visits: mergeVisitsNewestFirst([], localVisits),
+      fromServer: false,
+    };
+  }
+}
+
+export async function submitDiaryVisit(
+  diaryId: string,
+  input: { visitorName?: string; message: string; reaction: string }
+): Promise<{
+  visit: DiaryVisitRecord;
+  savedToServer: boolean;
+}> {
+  const visitorName = String(input.visitorName || '').trim().slice(0, 40);
+  const message = String(input.message || '').trim().slice(0, 300);
+  const reaction = ALLOWED_VISIT_REACTIONS.has(input.reaction) ? input.reaction : '👣';
+
+  if (!message) {
+    throw new Error('Message is required.');
+  }
+
+  const saveLocalFallback = (): DiaryVisitRecord => {
+    const localVisit: DiaryVisitRecord = {
+      id: `local_visit_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      diaryId,
+      visitorName,
+      message,
+      reaction,
+      visitedAt: Date.now(),
+    };
+    const map = readAllLocalVisitsMap();
+    const existing = Array.isArray(map[diaryId]) ? map[diaryId] : [];
+    map[diaryId] = [localVisit, ...existing].slice(0, 100);
+    writeAllLocalVisitsMap(map);
+    return localVisit;
+  };
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { visit: saveLocalFallback(), savedToServer: false };
+  }
+
+  try {
+    const res = await fetch(`/api/diaries/${encodeURIComponent(diaryId)}/visits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitorName, message, reaction }),
+    });
+
+    if (res.ok) {
+      const data = (await res.json()) as { visit: DiaryVisitRecord };
+      return { visit: data.visit, savedToServer: true };
+    }
+
+    if (res.status === 404 || res.status >= 500) {
+      // Diary is local-only / not yet uploaded to server or server unavailable: keep locally
+      return { visit: saveLocalFallback(), savedToServer: false };
+    }
+
+    throw new Error(await parseErrorResponse(res, '방문자 기록 저장 실패'));
+  } catch (err: any) {
+    if (err instanceof TypeError) {
+      return { visit: saveLocalFallback(), savedToServer: false };
+    }
+    throw err;
+  }
+}
+
+export async function deleteDiaryVisit(
+  diaryId: string,
+  visitId: string,
+  getIdToken: IdTokenGetter
+): Promise<boolean> {
+  const map = readAllLocalVisitsMap();
+  const existing = Array.isArray(map[diaryId]) ? map[diaryId] : [];
+  const hadInLocal = existing.some((v) => v.id === visitId);
+  if (hadInLocal) {
+    const next = existing.filter((v) => v.id !== visitId);
+    if (next.length === 0) {
+      delete map[diaryId];
+    } else {
+      map[diaryId] = next;
+    }
+    writeAllLocalVisitsMap(map);
+  }
+
+  if (visitId.startsWith('local_visit_')) {
+    return true;
+  }
+
+  const res = await fetchWithAuth(
+    `/api/diaries/${encodeURIComponent(diaryId)}/visits/${encodeURIComponent(visitId)}`,
+    getIdToken,
+    { method: 'DELETE' }
+  );
+  if (res.status === 404 && hadInLocal) {
+    return true;
+  }
+  if (!res.ok) {
+    throw new Error(await parseErrorResponse(res, '방문자 기록 삭제 실패'));
+  }
+  return true;
+}
+

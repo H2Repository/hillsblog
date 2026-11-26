@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { DiaryEntry } from '../types';
+import { DiaryEntry, DiaryVisitRecord } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { getLocalizedDiary } from '../utils/translationService';
 import { hasKorean, translateDiaryAsync } from '../utils/translationService';
@@ -29,10 +29,17 @@ import {
   CloudOff,
   CheckCircle2,
   RefreshCw,
-  Upload
+  Upload,
+  Footprints,
+  MessageSquareHeart
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { ServerDiarySyncStatus } from '../services/diaryCloudSql';
+import {
+  deleteDiaryVisit,
+  fetchDiaryVisits,
+  ServerDiarySyncStatus,
+  submitDiaryVisit,
+} from '../services/diaryCloudSql';
 import { filterValidPhotos } from '../utils/storage';
 import { useDisplayImageUrl } from '../utils/imageDisplay';
 
@@ -91,7 +98,11 @@ interface DiaryDetailModalProps {
   onPrevDiary?: () => void;
   hasNext?: boolean;
   hasPrev?: boolean;
+  initialScrollToVisits?: boolean;
+  onVisitsUpdated?: (diaryId: string, count: number) => void;
 }
+
+const VISIT_REACTIONS = ['👣', '❤️', '👏', '📷', '✨'] as const;
 
 export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   diary,
@@ -108,21 +119,67 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
   onPrevDiary,
   hasNext = false,
   hasPrev = false,
+  initialScrollToVisits = false,
+  onVisitsUpdated,
 }) => {
   const { t, language } = useLanguage();
-  const { canEditLocal } = useAuth();
+  const { canEditLocal, isAdmin, getIdToken } = useAuth();
   const [copied, setCopied] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [asyncDiary, setAsyncDiary] = useState<DiaryEntry | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
+  const [visits, setVisits] = useState<DiaryVisitRecord[]>([]);
+  const [isLoadingVisits, setIsLoadingVisits] = useState(false);
+  const [visitMessage, setVisitMessage] = useState('');
+  const [visitReaction, setVisitReaction] = useState<string>('👣');
+  const [isSubmittingVisit, setIsSubmittingVisit] = useState(false);
+  const [visitError, setVisitError] = useState<string | null>(null);
+  const [visitLocalNotice, setVisitLocalNotice] = useState(false);
+  const [deletingVisitId, setDeletingVisitId] = useState<string | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const visitsSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setShowOriginal(false);
     setFailedPhotoIds({});
+    setVisitMessage('');
+    setVisitError(null);
+    setVisitLocalNotice(false);
   }, [diary?.id, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !diary?.id) {
+      setVisits([]);
+      return;
+    }
+    let isCancelled = false;
+    setIsLoadingVisits(true);
+    fetchDiaryVisits(diary.id)
+      .then((res) => {
+        if (isCancelled) return;
+        setVisits(res.visits);
+        onVisitsUpdated?.(diary.id, res.visits.length);
+      })
+      .catch(() => {
+        if (!isCancelled) setVisits([]);
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoadingVisits(false);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, diary?.id]);
+
+  useEffect(() => {
+    if (!isOpen || !initialScrollToVisits) return;
+    const timer = window.setTimeout(() => {
+      visitsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, initialScrollToVisits, diary?.id]);
 
   useEffect(() => {
     if (!isOpen || !diary || language === 'ko' || showOriginal) {
@@ -270,6 +327,78 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
       navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  const handleSubmitVisit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!diary?.id || isSubmittingVisit) return;
+    const trimmedMessage = visitMessage.trim();
+    if (!trimmedMessage) {
+      setVisitError(t('visitErrorRequired'));
+      return;
+    }
+
+    setVisitError(null);
+    setVisitLocalNotice(false);
+    setIsSubmittingVisit(true);
+    try {
+      const result = await submitDiaryVisit(diary.id, {
+        message: trimmedMessage,
+        reaction: visitReaction,
+      });
+
+      const nextVisits = [result.visit, ...visits.filter((v) => v.id !== result.visit.id)];
+      setVisits(nextVisits);
+      setVisitMessage('');
+      if (!result.savedToServer) {
+        setVisitLocalNotice(true);
+      }
+      onVisitsUpdated?.(diary.id, nextVisits.length);
+    } catch (err: any) {
+      setVisitError(err?.message || t('visitErrorSubmit'));
+    } finally {
+      setIsSubmittingVisit(false);
+    }
+  };
+
+  const handleDeleteVisit = async (visitId: string) => {
+    if (!diary?.id || !isAdmin || deletingVisitId) return;
+    setDeletingVisitId(visitId);
+    setVisitError(null);
+    try {
+      await deleteDiaryVisit(diary.id, visitId, getIdToken);
+      const nextVisits = visits.filter((v) => v.id !== visitId);
+      setVisits(nextVisits);
+      onVisitsUpdated?.(diary.id, nextVisits.length);
+    } catch (err: any) {
+      setVisitError(err?.message || t('visitErrorSubmit'));
+    } finally {
+      setDeletingVisitId(null);
+    }
+  };
+
+  const formatVisitTimestamp = (ts: number) => {
+    try {
+      const locale =
+        language === 'ko'
+          ? 'ko-KR'
+          : language === 'ja'
+            ? 'ja-JP'
+            : language === 'vi'
+              ? 'vi-VN'
+              : language === 'es'
+                ? 'es-ES'
+                : 'en-US';
+      return new Intl.DateTimeFormat(locale, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(ts));
+    } catch {
+      return new Date(ts).toLocaleString();
     }
   };
 
@@ -641,6 +770,138 @@ export const DiaryDetailModal: React.FC<DiaryDetailModalProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Visitor Footprints & Guestbook Section */}
+            <div
+              id="diary-visits-section"
+              ref={visitsSectionRef}
+              className="rounded-2xl border border-stone-200 bg-white p-4 sm:p-5 space-y-4 shadow-2xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center">
+                    <Footprints className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-bold text-stone-900">
+                    {t('visitSectionTitle')}
+                  </h3>
+                </div>
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                  {t('visitCountBadge', { count: visits.length })}
+                </span>
+              </div>
+
+              {/* Leave a Visit Form */}
+              <form onSubmit={handleSubmitVisit} className="space-y-3 bg-stone-50/80 border border-stone-200/80 rounded-xl p-3.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[11px] font-semibold text-stone-600">
+                    {t('visitReactionLabel')}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {VISIT_REACTIONS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => setVisitReaction(emoji)}
+                        className={`w-8 h-8 rounded-lg text-base flex items-center justify-center border transition cursor-pointer ${
+                          visitReaction === emoji
+                            ? 'bg-amber-100 border-amber-400 shadow-2xs scale-105'
+                            : 'bg-white border-stone-200 hover:bg-stone-100'
+                        }`}
+                        aria-pressed={visitReaction === emoji}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <textarea
+                    rows={2}
+                    value={visitMessage}
+                    onChange={(e) => setVisitMessage(e.target.value)}
+                    maxLength={300}
+                    placeholder={t('visitMessagePlaceholder')}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-lg border border-stone-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/40 resize-y min-h-[58px]"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-stone-400">
+                      {visitMessage.length}/300
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingVisit}
+                      className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer shadow-2xs"
+                    >
+                      {isSubmittingVisit ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <MessageSquareHeart className="w-3.5 h-3.5" />
+                      )}
+                      <span>{isSubmittingVisit ? t('visitSubmitting') : t('visitSubmitBtn')}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {visitError && (
+                  <p className="text-xs text-rose-600 font-medium">{visitError}</p>
+                )}
+                {visitLocalNotice && (
+                  <p className="text-[11px] text-amber-700 font-medium">{t('visitLocalDraftNotice')}</p>
+                )}
+              </form>
+
+              {/* Visit List */}
+              {isLoadingVisits ? (
+                <div className="flex items-center justify-center py-5 text-stone-400 text-xs gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                </div>
+              ) : visits.length === 0 ? (
+                <div className="text-center py-5 text-xs text-stone-400 bg-stone-50/50 rounded-xl border border-dashed border-stone-200">
+                  {t('visitEmpty')}
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {visits.map((visit) => (
+                    <div
+                      key={visit.id}
+                      className="flex items-start gap-2.5 p-3 rounded-xl bg-stone-50/80 border border-stone-200/70"
+                    >
+                      <span className="w-8 h-8 rounded-lg bg-white border border-stone-200 flex items-center justify-center text-base shrink-0">
+                        {visit.reaction || '👣'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-stone-400">
+                            {formatVisitTimestamp(visit.visitedAt)}
+                          </span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteVisit(visit.id)}
+                              disabled={deletingVisitId === visit.id}
+                              className="p-1 rounded text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer disabled:opacity-50 shrink-0"
+                              title={t('visitDeleteAria')}
+                              aria-label={t('visitDeleteAria')}
+                            >
+                              {deletingVisitId === visit.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-xs text-stone-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
+                          {visit.message}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
